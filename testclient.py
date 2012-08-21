@@ -23,6 +23,8 @@ def new_dset(sock):
     reply = sock.recv(2048)
     print "Got reply"
     if not handle_response(reply):
+        print "Request failed!"
+        print reply
         return
     """
     for i in arr:

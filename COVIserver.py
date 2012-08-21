@@ -11,9 +11,9 @@ from hashlib import sha256
 from traceback import print_exc
 from getopt import getopt, GetoptError
 import hashlib
-from OpenSSL import SSL
 from shutil import rmtree
 from time import sleep
+import tarfile
 
 svr_socket_manager = ''
 
@@ -139,7 +139,7 @@ class SvrSocketMgr(threading.Thread):
             else:
                 home = os.popen('echo ~').read().strip()
                 config = {
-                          "datadir":"./datasets", "svrport":14338, "afnidir":os.path.join(home, "abin"),
+                          "datadir":"datasets", "svrport":14338, "afnidir":os.path.join(home, "abin"),
                           "hostname":socket.gethostname(), "cert":None, "pkey":None,
                           }
     
@@ -670,6 +670,12 @@ class ClientThread(threading.Thread):
             if res and len(res) == 3:
                 if self.v: print "Thread %s auth ok"%(self.name)
                 self.permissions = {'uid':res[0], 'admin':res[2]}
+                userdir = os.path.join(
+                                   self.config['COVIdir'],
+                                   self.config['datadir'],
+                                   self.permissions['uid']
+                                   )
+                self.permissions['userdir'] = userdir
                 self.req_ok()
             else:
                 if self.v: print "Thread %s auth failed"%(self.name)
@@ -694,14 +700,21 @@ class ClientThread(threading.Thread):
             self.req_fail("it is not a valid new dataset request")
             return
         
+        dset_dir = os.path.join(
+                                self.permissions["userdir"],
+                                name
+                                )
+        
         try:
             if self.v: print "Thread %s creating directories"%(self.name)
             try:
-                dset_dir = os.path.join(
-                                   self.config['COVIdir'],
-                                   self.permissions['uid'],
-                                   name
-                                   )
+                if os.path.exists(dset_dir):
+                    if self.v: print "Thread %s dataset already exists"%(self.name)
+                    self.req_fail("there is already a dataset with that name. If you want to resubmit it, "+
+                                  "use the resubmit function")
+                    return
+                    
+                print dset_dir
                 os.makedirs(dset_dir)
                 dset_arch = open(os.path.join(dset_dir,'%s.tar.gz'%(name)), 'wb')
                  
@@ -724,17 +737,25 @@ class ClientThread(threading.Thread):
             bytes_recvd = 0
             
             try:
+                arch_hash = hashlib.md5()
                 if self.v: print "Thread %s trying to start receiving data"%(self.name)
                 # This may not work
                 while bytes_recvd < length:
                     temp = self.try_recv()
-                    arr.append(temp)
-                    bytes_recvd += len(arr[-1])
+                    arch_hash.update(temp)
+                    bytes_recvd += len(temp)
+                    dset_arch.write(temp)
+                    #@arr.append(temp)
+                    #bytes_recvd += len(arr[-1])
                     if self.v: print "Thread %s recv'd %i bytes_recvd so far"%(self.name, bytes_recvd)
                 data = ''.join(arr)
             except ssl.socket_error:
                 if self.v: print "Thread %s timed out"%(self.name)
                 self.req_fail('the connection timed out while transferring the dataset.')
+                raise CThreadException()
+            except IOError:
+                if self.v: print "Thread %s failed while writing archive"%(self.name)
+                self.req_fail('there was an error while writing archive')
                 raise CThreadException()
             except CThreadException as e:
                 if self.v: print "Thread %s connection broken"%(self.name)
@@ -742,14 +763,43 @@ class ClientThread(threading.Thread):
     
                     
             if self.v: print "Thread %s checking data integrity "%(self.name)
-            svr_md5 = hashlib.md5(data).hexdigest()
+            svr_md5 = arch_hash.hexdigest()
             if svr_md5 != md5:
+                if self.v: print "Thread %s data integrity check failed "%(self.name)
                 self.req_fail('the data received was different from the data sent due to a transmission error',)
                 raise CThreadException()
                 
             if self.v: print "Thread %s writing archive "%(self.name)
             dset_arch.write(data)
-            dset_arch.close()
+            dset_arch.seek(0)
+            
+            
+            # Extract archive, using only the base name for each file, for security
+            if self.v: print "Thread %s Trying to extract archive "%(self.name)
+            try:
+                dset_arch.close()
+                dset_arch = open(dset_arch.name, "rb")
+                tar = tarfile.open(fileobj=dset_arch)
+                if self.v: print "Thread %s writing archive files "%(self.name)
+                for fi in tar:
+                    out = open(
+                               os.path.join(dset_dir,
+                               os.path.basename(fi.name)), 
+                               'wb')
+                    out.write(fi.tobuf())
+                    out.close()
+                    if self.v: print "Thread %s writing %s "%(self.name, os.path.basename(fi.name))
+                dset_arch.close()
+                if self.v: print "Thread %s removing archive"%(self.name)
+                os.remove(dset_arch.name)
+            except tarfile.TarError as e:
+                if self.v: print "Thread %s opening tar failed %s"%(self.name,str(e))
+                self.req_fail('the data received was not a valid tar archive')
+            except IOError as e:
+                if self.v: print "Thread %s failed while writing dataset %s"%(self.name,str(e))
+                self.req_fail('there was an error while writing the dataset')
+                
+            if self.v: print "Thread %s new dataset addition OK"%(self.name)
             self.req_ok()
         except Exception as e:
             if self.v: print "Thread %s cleaning up directories "%(self.name)
