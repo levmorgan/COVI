@@ -10,6 +10,10 @@ from getpass import unix_getpass
 from hashlib import sha256
 from traceback import print_exc
 from getopt import getopt, GetoptError
+import hashlib
+from OpenSSL import SSL
+from shutil import rmtree
+from time import sleep
 
 svr_socket_manager = ''
 
@@ -83,9 +87,8 @@ class SvrSocketMgr(threading.Thread):
         print "%s: %s"%((type(e).__name__), str(e))
         print type(e)
         print_exc()
-        sys.exit(1)
-            
-        
+        #raise Exception("Fatal")
+        signal.alarm(1)
 
     def __init__(self, conf_file="COVI_svr.conf", verbose=False):
         '''
@@ -404,6 +407,7 @@ class SvrSocketMgr(threading.Thread):
             print "Configuration file was written successfully! You can now start using server by relaunching it."
         except Exception as e:
             self.fatal_error('configuration', e)
+            return
             
     def run(self):
         # Start the server
@@ -413,6 +417,7 @@ class SvrSocketMgr(threading.Thread):
             self.conn = sqlite3.connect(os.path.join(self.config['COVIdir'],"COVI_svr.db"), )
         except sqlite3.Error as e:
             self.fatal_error('startup', e)
+            return
         print "Connected to database successfully"
             
         # Pipeline stuff is TBA
@@ -434,6 +439,7 @@ class SvrSocketMgr(threading.Thread):
                 
         if not success:
             self.fatal_error("opening server port", e)
+            return
             
         print "COVI server is now up and accepting connections"
         if self.v: print "Beginning main loop"
@@ -444,8 +450,20 @@ class SvrSocketMgr(threading.Thread):
             self.client_threads.append(ClientThread(client_socket,
                                        self.config
                                        ))
-            self.client_threads[-1]
-            self.client_threads[-1].start()
+            #self.client_threads[-1]
+            try:
+                self.client_threads[-1].start()
+            except Exception as e:
+                err_str = "Thread %s experienced a fatal error %s"%(
+                                              self.client_threads[-1].name,
+                                              str(e)
+                                              )
+                if self.v: print err_str
+                self.client_threads[-1].req_fail("The thread handling your requests experienced a fatal error. "
+                                                 +"Please reconnect.")
+                
+                
+                
             if self.v: print "Thread dispatched"
             #self.client_sockets.append(client_socket)
     
@@ -483,6 +501,10 @@ class SvrSocketMgr(threading.Thread):
         secsock.close()
         svrsock.close()
         
+class CThreadException(Exception):
+    def __init__(self, message=''):
+        self.message = message
+        
 class ClientThread(threading.Thread):
     '''
     The class that deals with requests from clients.
@@ -500,8 +522,9 @@ class ClientThread(threading.Thread):
         self.client_socket = client_socket
         self.dispatch = {
                             "auth":self.auth,
-                            None:"""
                             "new":self.new,
+                            None:"""
+                            
                             "matrix":self.matrix,
                             "resubmit":self.resubmit,
                             "rename":self.rename,
@@ -511,6 +534,21 @@ class ClientThread(threading.Thread):
                          }
         self.config = config
         self.permissions = ''
+        
+    def try_recv(self, bufsize=2048):
+        try:
+            data = self.client_socket.recv(2048)
+            if not data:
+                raise CThreadException("Connection was terminated")
+            return data
+        except ssl.socket_error:
+            if self.v: print "Thread %s timed out"%(self.name)
+            self.req_fail('the connection timed out')
+        except socket.error as e:
+            if self.v: print "Thread %s socket error while receiving: %s"%(self.name, str(e))
+            self.req_fail('there was a connection error: %s'%(str(e)))
+            
+        
         
     def clean_up(self):
         # TODO: Make cleanup method for threads
@@ -542,7 +580,7 @@ class ClientThread(threading.Thread):
         if self.v: print "Thread %s blocking on SSL handshake"%self.name
         try:
             self.client_socket.do_handshake()
-        except socket.timeout:
+        except ssl.socket_error:
             if self.v: print "Thread %s handshake timed out"%self.name
             self.client_socket.close()
             return
@@ -558,7 +596,8 @@ class ClientThread(threading.Thread):
             try:
                 timeouts = 0
                 enc_req = self.client_socket.recv()
-            except socket.timeout:
+            
+            except ssl.socket_error:
                 timeouts += 1
                 # If there has been no communication for 5 minutes, die
                 if timeouts >= 60:
@@ -587,7 +626,7 @@ class ClientThread(threading.Thread):
                 if self.v: print "Thread %s trying to handle request"%self.name
                 req = req['covi-request']
                 self.dispatch[req['type']](req)
-            except Exception as e:
+            except KeyError as e:
                 # Bad message. Ignore it.
                 self.req_fail("it was not a valid COVI request")
                 if self.v: print "Thread %s error getting message type: %s"%(self.name, e.message)
@@ -630,16 +669,99 @@ class ClientThread(threading.Thread):
                                             [user, passwd]).fetchone()
             if res and len(res) == 3:
                 if self.v: print "Thread %s auth ok"%(self.name)
-                self.permissions = [res[0], res[2]]
+                self.permissions = {'uid':res[0], 'admin':res[2]}
                 self.req_ok()
             else:
                 if self.v: print "Thread %s auth failed"%(self.name)
                 self.req_fail("Username or password could not be authenticated", prefix=False)
+                return
                 
         
         except Exception as e:
             if self.v: print "Thread %s auth failed, DB error: %s"%(self.name, str(e))
             self.req_fail("of a database error")
+            return
+            
+    def new(self, req):
+        
+        if self.v: print "Thread %s trying to get dset metadata"%(self.name)
+        try:
+            name = req['name']
+            length = int(req['len'])
+            md5 = req['md5']
+        except:
+            if self.v: print "Thread %s invalid data in new dset request"%(self.name)
+            self.req_fail("it is not a valid new dataset request")
+            return
+        
+        try:
+            if self.v: print "Thread %s creating directories"%(self.name)
+            try:
+                dset_dir = os.path.join(
+                                   self.config['COVIdir'],
+                                   self.permissions['uid'],
+                                   name
+                                   )
+                os.makedirs(dset_dir)
+                dset_arch = open(os.path.join(dset_dir,'%s.tar.gz'%(name)), 'wb')
+                 
+            except Exception as e:
+                if self.v: print "Thread %s failed to create file/dir for new dset"%(self.name)
+                self.req_fail('your dataset could not be written to disk. Make sure the dataset name'+
+                              'does not include any illegal characters')
+                raise CThreadException()
+                
+            if self.v: print "Thread %s sending metadata receipt OK"%(self.name)
+            try:
+                self.req_ok()
+            except Exception as e:
+                if self.v: print "Thread %s encountered unrecoverable exception"%(self.name, str(e))
+                raise CThreadException()
+                
+                
+            
+            arr = []
+            bytes_recvd = 0
+            
+            try:
+                if self.v: print "Thread %s trying to start receiving data"%(self.name)
+                # This may not work
+                while bytes_recvd < length:
+                    temp = self.try_recv()
+                    arr.append(temp)
+                    bytes_recvd += len(arr[-1])
+                    if self.v: print "Thread %s recv'd %i bytes_recvd so far"%(self.name, bytes_recvd)
+                data = ''.join(arr)
+            except ssl.socket_error:
+                if self.v: print "Thread %s timed out"%(self.name)
+                self.req_fail('the connection timed out while transferring the dataset.')
+                raise CThreadException()
+            except CThreadException as e:
+                if self.v: print "Thread %s connection broken"%(self.name)
+                raise
+    
+                    
+            if self.v: print "Thread %s checking data integrity "%(self.name)
+            svr_md5 = hashlib.md5(data).hexdigest()
+            if svr_md5 != md5:
+                self.req_fail('the data received was different from the data sent due to a transmission error',)
+                raise CThreadException()
+                
+            if self.v: print "Thread %s writing archive "%(self.name)
+            dset_arch.write(data)
+            dset_arch.close()
+            self.req_ok()
+        except Exception as e:
+            if self.v: print "Thread %s cleaning up directories "%(self.name)
+            if os.path.exists(dset_dir):
+                try:
+                    rmtree(dset_dir)
+                except OSError:
+                    #TODO: Notify an administrator about this
+                    pass
+            if type(e) != CThreadException:
+                if self.v: print "Thread %s caught non-CThread Exception; passing it on"%(self.name)
+                raise
             
 
 def close_gracefully(signal, frame):
@@ -675,7 +797,13 @@ if __name__ == '__main__':
     #svr_socket_manager.run()
     #svr_socket_manager.test_sock()
     svr_socket_manager.setDaemon(True)
-    svr_socket_manager.start()
+    try:
+        svr_socket_manager.start()
+    except Exception as e:
+        print_exc()
+        print "Exiting"
+        sys.exit(1)
+        
     
     #set up signal handling
     
@@ -684,6 +812,4 @@ if __name__ == '__main__':
     signal.signal(signal.SIGQUIT, close_gracefully)
     #signal.signal(signal.SIGKILL, close_gracefully)
     
-    
     signal.pause()
-    
