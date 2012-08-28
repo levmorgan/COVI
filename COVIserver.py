@@ -454,7 +454,7 @@ class SvrSocketMgr(threading.Thread):
             try:
                 self.client_threads[-1].start()
             except Exception as e:
-                err_str = "Thread %s experienced a fatal error %s"%(
+                err_str = "Thread %s: run: experienced a fatal error %s"%(
                                               self.client_threads[-1].name,
                                               str(e)
                                               )
@@ -523,9 +523,8 @@ class ClientThread(threading.Thread):
         self.dispatch = {
                             "auth":self.auth,
                             "new":self.new,
-                            None:"""
-                            
                             "matrix":self.matrix,
+                            None:"""
                             "resubmit":self.resubmit,
                             "rename":self.rename,
                             "delete":self.delete,
@@ -539,14 +538,16 @@ class ClientThread(threading.Thread):
         try:
             data = self.client_socket.recv(2048)
             if not data:
-                raise CThreadException("Connection was terminated")
+                raise CThreadException("connection was terminated")
             return data
         except ssl.socket_error:
-            if self.v: print "Thread %s timed out"%(self.name)
+            if self.v: print "Thread %s: timed out"%(self.name)
             self.req_fail('the connection timed out')
+            raise CThreadException("connection timed out")
         except socket.error as e:
             if self.v: print "Thread %s socket error while receiving: %s"%(self.name, str(e))
             self.req_fail('there was a connection error: %s'%(str(e)))
+            raise CThreadException("connection error")
             
         
         
@@ -648,7 +649,7 @@ class ClientThread(threading.Thread):
         # handle authentication
         
         if self.v: 
-            print "Thread %s beginning authentication handling"%(self.name)
+            print "Thread %s: auth: beginning authentication handling"%(self.name)
         try:
             user = req['username'] 
             passwd = req['password']
@@ -656,19 +657,19 @@ class ClientThread(threading.Thread):
         
         except KeyError:
             # Bad request, ignore it
-            if self.v: print "Thread %s could not find valid uid and password"%(self.name)
+            if self.v: print "Thread %s: auth: could not find valid uid and password"%(self.name)
             self.req_fail("it was an auth request but did not contain a valid username and password")
             return
         
         # Fetch permissions
         try:    
-            if self.v: print "Thread %s trying to fetch auth info from database"%(self.name)
+            if self.v: print "Thread %s: auth: trying to fetch auth info from database"%(self.name)
             conn = sqlite3.connect("COVI_svr.db", timeout=20)
             
             res = conn.execute('SELECT * FROM users WHERE uid=? and passhash=?', 
                                             [user, passwd]).fetchone()
             if res and len(res) == 3:
-                if self.v: print "Thread %s auth ok"%(self.name)
+                if self.v: print "Thread %s: auth: auth ok"%(self.name)
                 self.permissions = {'uid':res[0], 'admin':res[2]}
                 userdir = os.path.join(
                                    self.config['COVIdir'],
@@ -678,38 +679,37 @@ class ClientThread(threading.Thread):
                 self.permissions['userdir'] = userdir
                 self.req_ok()
             else:
-                if self.v: print "Thread %s auth failed"%(self.name)
+                if self.v: print "Thread %s: auth: auth failed"%(self.name)
                 self.req_fail("Username or password could not be authenticated", prefix=False)
                 return
                 
         
         except Exception as e:
-            if self.v: print "Thread %s auth failed, DB error: %s"%(self.name, str(e))
+            if self.v: print "Thread %s: auth: auth failed, DB error: %s"%(self.name, str(e))
             self.req_fail("of a database error")
             return
             
     def new(self, req):
-        
-        if self.v: print "Thread %s trying to get dset metadata"%(self.name)
+        if self.v: print "Thread %s: new dset: trying to get dset metadata"%(self.name)
         try:
             name = req['name']
             length = int(req['len'])
             md5 = req['md5']
         except:
-            if self.v: print "Thread %s invalid data in new dset request"%(self.name)
+            if self.v: print "Thread %s: new dset: invalid data in new dset request"%(self.name)
             self.req_fail("it is not a valid new dataset request")
             return
         
-        dset_dir = os.path.join(
-                                self.permissions["userdir"],
-                                name
-                                )
+            dset_dir = os.path.join(
+                                    self.permissions["userdir"],
+                                    name
+                                    )
         
         try:
-            if self.v: print "Thread %s creating directories"%(self.name)
+            if self.v: print "Thread %s: new dset: creating directories"%(self.name)
             try:
                 if os.path.exists(dset_dir):
-                    if self.v: print "Thread %s dataset already exists"%(self.name)
+                    if self.v: print "Thread %s: new dset: dataset already exists"%(self.name)
                     self.req_fail("there is already a dataset with that name. If you want to resubmit it, "+
                                   "use the resubmit function")
                     return
@@ -719,16 +719,16 @@ class ClientThread(threading.Thread):
                 dset_arch = open(os.path.join(dset_dir,'%s.tar.gz'%(name)), 'wb')
                  
             except Exception as e:
-                if self.v: print "Thread %s failed to create file/dir for new dset"%(self.name)
+                if self.v: print "Thread %s: new dset: failed to create file/dir for new dset"%(self.name)
                 self.req_fail('your dataset could not be written to disk. Make sure the dataset name'+
                               'does not include any illegal characters')
                 raise CThreadException()
                 
-            if self.v: print "Thread %s sending metadata receipt OK"%(self.name)
+            if self.v: print "Thread %s: new dset: sending metadata receipt OK"%(self.name)
             try:
                 self.req_ok()
             except Exception as e:
-                if self.v: print "Thread %s encountered unrecoverable exception"%(self.name, str(e))
+                if self.v: print "Thread %s: new dset: encountered unrecoverable exception"%(self.name, str(e))
                 raise CThreadException()
                 
                 
@@ -738,7 +738,7 @@ class ClientThread(threading.Thread):
             
             try:
                 arch_hash = hashlib.md5()
-                if self.v: print "Thread %s trying to start receiving data"%(self.name)
+                if self.v: print "Thread %s: new dset: trying to start receiving data"%(self.name)
                 # This may not work
                 while bytes_recvd < length:
                     temp = self.try_recv()
@@ -747,40 +747,40 @@ class ClientThread(threading.Thread):
                     dset_arch.write(temp)
                     #@arr.append(temp)
                     #bytes_recvd += len(arr[-1])
-                    if self.v: print "Thread %s recv'd %i bytes_recvd so far"%(self.name, bytes_recvd)
+                    if self.v: print "Thread %s: new dset: recv'd %i bytes_recvd so far"%(self.name, bytes_recvd)
                 data = ''.join(arr)
             except ssl.socket_error:
-                if self.v: print "Thread %s timed out"%(self.name)
+                if self.v: print "Thread %s: new dset: timed out"%(self.name)
                 self.req_fail('the connection timed out while transferring the dataset.')
                 raise CThreadException()
             except IOError:
-                if self.v: print "Thread %s failed while writing archive"%(self.name)
+                if self.v: print "Thread %s: new dset: failed while writing archive"%(self.name)
                 self.req_fail('there was an error while writing archive')
                 raise CThreadException()
             except CThreadException as e:
-                if self.v: print "Thread %s connection broken"%(self.name)
+                if self.v: print "Thread %s: new dset: %s"%(self.name, e.message)
                 raise
     
                     
-            if self.v: print "Thread %s checking data integrity "%(self.name)
+            if self.v: print "Thread %s: new dset: checking data integrity "%(self.name)
             svr_md5 = arch_hash.hexdigest()
             if svr_md5 != md5:
-                if self.v: print "Thread %s data integrity check failed "%(self.name)
+                if self.v: print "Thread %s: new dset: data integrity check failed "%(self.name)
                 self.req_fail('the data received was different from the data sent due to a transmission error',)
                 raise CThreadException()
                 
-            if self.v: print "Thread %s writing archive "%(self.name)
+            if self.v: print "Thread %s: new dset: writing archive "%(self.name)
             dset_arch.write(data)
             dset_arch.seek(0)
             
             
             # Extract archive, using only the base name for each file, for security
-            if self.v: print "Thread %s Trying to extract archive "%(self.name)
+            if self.v: print "Thread %s: new dset: Trying to extract archive "%(self.name)
             try:
                 dset_arch.close()
                 dset_arch = open(dset_arch.name, "rb")
                 tar = tarfile.open(fileobj=dset_arch)
-                if self.v: print "Thread %s writing archive files "%(self.name)
+                if self.v: print "Thread %s: new dset: writing archive files "%(self.name)
                 for fi in tar:
                     out = open(
                                os.path.join(dset_dir,
@@ -788,21 +788,21 @@ class ClientThread(threading.Thread):
                                'wb')
                     out.write(fi.tobuf())
                     out.close()
-                    if self.v: print "Thread %s writing %s "%(self.name, os.path.basename(fi.name))
+                if self.v: print "Thread %s: new dset: wrote dataset "%(self.name, os.path.basename(fi.name))
                 dset_arch.close()
-                if self.v: print "Thread %s removing archive"%(self.name)
+                if self.v: print "Thread %s: new dset: removing archive"%(self.name)
                 os.remove(dset_arch.name)
             except tarfile.TarError as e:
-                if self.v: print "Thread %s opening tar failed %s"%(self.name,str(e))
+                if self.v: print "Thread %s: new dset: opening tar failed %s"%(self.name,str(e))
                 self.req_fail('the data received was not a valid tar archive')
             except IOError as e:
-                if self.v: print "Thread %s failed while writing dataset %s"%(self.name,str(e))
+                if self.v: print "Thread %s: new dset: failed while writing dataset %s"%(self.name,str(e))
                 self.req_fail('there was an error while writing the dataset')
                 
-            if self.v: print "Thread %s new dataset addition OK"%(self.name)
+            if self.v: print "Thread %s: new dset: new dataset addition OK"%(self.name)
             self.req_ok()
         except Exception as e:
-            if self.v: print "Thread %s cleaning up directories "%(self.name)
+            if self.v: print "Thread %s: new dset: cleaning up directories "%(self.name)
             if os.path.exists(dset_dir):
                 try:
                     rmtree(dset_dir)
@@ -810,10 +810,66 @@ class ClientThread(threading.Thread):
                     #TODO: Notify an administrator about this
                     pass
             if type(e) != CThreadException:
-                if self.v: print "Thread %s caught non-CThread Exception; passing it on"%(self.name)
+                if self.v: print "Thread %s: new dset: caught non-CThread Exception; passing it on"%(self.name)
                 raise
+        
+    def matrix(self, req):
+        if self.v: print "Thread %s: matrix request: trying to get dset metadata"%(self.name)
+        try:
+            dset = req['dset']
+            mat = int(req['number'])
+        except:
+            if self.v: print "Thread %s: matrix request: invalid data in matrix request"%(self.name)
+            self.req_fail("it is not a valid matrix request")
+            return
+        
+        dset_dir = os.path.join(
+                                self.permissions["userdir"],
+                                dset
+                                )
+        
+        # TODO: Determine file format definitively
+        try:
+            mat_file = open(os.path.join(dset_dir,'%i.covi'%(mat)))
+            data = mat_file.read()
+            mat_file.close()
             
+            md5_hash = hashlib.md5(data).hexdigest()
+            mat_len = os.stat(mat_file.name).st_size
+            resp = { "covi-response": { "type":"matrix", "len":mat_len, "md5":md5_hash} }
+            self.client_socket.send(json.dumps(resp))
+            try:
+                reply = self.try_recv(2048)
+            except CThreadException as e:
+                if self.v: print "Thread %s: matrix request: %s"%(self.name, e.message)
+                return
+            try:
+                reply = json.loads(reply)
+                if reply["covi-request"]["type"] != "resp ok":
+                    raise CThreadException("")
+            except:
+                if self.v: print "Thread %s: matrix request: invalid data in response from client"%(self.name)
+                self.req_fail("it is not a valid response")
+                return
+            self.client_socket.send(data)
+            
+            
+        except IOError as e:
+            if self.v: print "Thread %s could not open matrix: %s"%(self.name, str(e))
+            self.req_fail("matrix %i could not be opened"%(mat))
+            return
+        except Exception as e:
+            if self.v: print "Thread %s encountered an exception while opening/sending matrix: %s"%(self.name, str(e))
+            self.req_fail("there was an error reading or sending matrix %i"%(mat))
+            return
+        
+    def close(self, req):
+        self.client_socket.close()
+        self.cont = False
+        self.permissions = {}
+        if self.v: print "Thread %s: close: connection closed"%(self.name)
 
+            
 def close_gracefully(signal, frame):
     print "COVI server is terminating"
     svr_socket_manager.clean_up()
