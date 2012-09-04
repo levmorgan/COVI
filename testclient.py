@@ -8,6 +8,20 @@ def auth_bad(sock):
     req = { "covi-request": { "type":"auth", "username":"wrong", "password":"wrong" } }
     sock.send(json.dumps(req))
 
+def lst(sock):
+    sock.send(json.dumps({ "covi-request": { "type":"list" } }))
+    res = handle_response(sock.recv())
+    if not res:
+        return
+    try:
+        lst = res['list']
+    except Exception as e:
+        print "%s: %s"(type(e).__name__, str(e))
+        return
+
+    for i in lst:
+        print i
+
 def new_dset(sock):
     randf = open('fakedset1.tar.gz', 'rb')
     rsize = os.stat(randf.name).st_size
@@ -17,7 +31,7 @@ def new_dset(sock):
     md5 = hashlib.md5(arr).hexdigest()
     randf.close()
 
-    req = { "covi-request": { "type":"new", "name":"fakedset1", "len":rsize, "md5":md5 } }
+    req = { "covi-request": { "type":"new", "dset":"fakedset1", "len":rsize, "md5":md5 } }
     sock.send(json.dumps(req))
     print "Sent req, waiting for reply"
     reply = sock.recv(2048)
@@ -69,8 +83,20 @@ def matrix_req(sock, bad=False):
         print md5_hash
         print "Equal? "
         print recv_hash == md5_hash
-
         
+def rename(sock):
+   sock.send(json.dumps({ "covi-request": { "type":"rename", "old":"fakedset1", "new":"fakedset2" } }))
+   #sock.send(json.dumps({ "covi-request": { "type":"rename",  "new":"fakedset2" } }))
+   res = handle_response(sock.recv())
+   if res: print "Rename successful!"
+
+def remove(sock):
+   sock.send(json.dumps({ "covi-request": { "type":"remove", "dset":"fakedset2" } }))
+   res = handle_response(sock.recv())
+   if res: print "Remove successful!"
+
+def close(sock):
+   sock.send(json.dumps({ "covi-request": { "type":"close" } }))
 
     
 
@@ -109,9 +135,11 @@ auth_good(secclisock)
 print "Reply: "
 print secclisock.read()
 
+print "Trying list request"
+lst(secclisock)
+
 print "Sending new dset"
-print "No, I'm not"
-#new_dset(secclisock)
+new_dset(secclisock)
 
 """
 print "Sending bad auth"
@@ -123,6 +151,13 @@ print "Requesting a matrix"
 matrix_req(secclisock)
 print "Requesting an invalid matrix"
 matrix_req(secclisock, bad=True)
+print "Trying rename"
+rename(secclisock)
+print "Removing dataset"
+remove(secclisock)
+
+print "Closing connection"
+close(secclisock)
 
 
 secclisock.close()
