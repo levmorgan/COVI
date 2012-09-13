@@ -12,7 +12,7 @@ from traceback import print_exc
 from getopt import getopt, GetoptError
 import hashlib
 from shutil import rmtree
-from time import sleep
+#from time import sleep
 import tarfile
 import shutil
 
