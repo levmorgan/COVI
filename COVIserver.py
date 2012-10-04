@@ -15,11 +15,15 @@ from shutil import rmtree
 #from time import sleep
 import tarfile
 import shutil
+from multiprocessing import Process
 
 svr_socket_manager = ''
 
 def validated_input(regex, error_message):
     pass
+
+def full_name(obj):
+    return obj.__module__ + '.' + obj.__class__.name
 
 class SvrSocketMgr(threading.Thread):
     '''
@@ -85,8 +89,8 @@ class SvrSocketMgr(threading.Thread):
     def fatal_error(self, function, e):
         print "COVI has encountered an error during %s and cannot continue."%(function)
         print "The error was:"
-        print "%s: %s"%((type(e).__name__), str(e))
-        print type(e)
+        print "%s: %s"%(full_name(e), str(e))
+        print full_name(e)
         print_exc()
         #raise Exception("Fatal")
         signal.alarm(1)
@@ -101,20 +105,22 @@ class SvrSocketMgr(threading.Thread):
         try:
             conf_file = open(conf_file)
         except IOError:
-            print "Could not open configuraton file. Configure COVI server?"
+            print "Could not open configuration file. Configure COVI server?"
             out = self.yn_input()
             if out == 'y':
                 try:
                     self.configure_svr()
                     conf_file = open(conf_file)
+                # TODO: Catching "Exception" here
                 except Exception as e:
-                    print "COVI has encountered a(n) %s during configuration and cannot continue. "%(type(e).__name__)
+                    print ("COVI has encountered a(n) %s exception"%(full_name(e)) + 
+                           " during configuration and cannot continue.")
                     print "The error was:"
                     print str(e)
                     sys.exit(1)
                 
             else:
-                print "COVI cannot proceed without the configuration file. Exiting."
+                print "COVI can't proceed without the configuration file. Exiting."
                 sys.exit(1)
                 
         self.config = json.load(conf_file)
@@ -126,30 +132,53 @@ class SvrSocketMgr(threading.Thread):
     
     def configure_svr(self):
         try:
-            try:
-                open('COVIserver.py', 'r')
-                
-            except IOError:
-                print "ERROR: COVI server configuration must be started from the COVI directory."
-                sys.exit(1)
-            ''' 
-            Configure COVI server and write out a configuration file.
-            '''      
-            if self.config:
-                config = self.config
+            open('COVIserver.py', 'r')
+            
+        except IOError:
+            print "ERROR: COVI server configuration must be started from the COVI directory."
+            sys.exit(1)
+        ''' 
+        Configure COVI server and write out a configuration file.
+        '''      
+        if self.config:
+            config = self.config
+        else:
+            home = os.popen('echo ~').read().strip()
+            config = {
+                      "datadir":"datasets", "svrport":14338, "afnidir":os.path.join(home, "abin"),
+                      "hostname":socket.gethostname(), "cert":None, "pkey":None,
+                      }
+
+        print "COVI Server Configuration\n\n"
+        
+        
+        print "In which directory should COVI server store its datasets?"
+        valid = False
+        default = config["datadir"]
+        while not valid:
+            print "[%s] "%(default),
+            inp = raw_input()
+            inp.strip()
+            
+            if inp == '':
+                inp = default
+                if not os.path.exists(inp):
+                    os.mkdir(inp)
+                    
+            if os.access(inp, os.W_OK):
+                valid = True
             else:
-                home = os.popen('echo ~').read().strip()
-                config = {
-                          "datadir":"datasets", "svrport":14338, "afnidir":os.path.join(home, "abin"),
-                          "hostname":socket.gethostname(), "cert":None, "pkey":None,
-                          }
-    
-            print "COVI Server Configuration\n\n"
+                sys.stderr.write("Could not write to directory %s. Check your input and try again.\n"%(inp))
+        config['datadir'] = inp
+        
+        
+        print "Are AFNI/SUMA installed?"
+        out = self.yn_input()
+        if out == 'y':
             
-            
-            print "In which directory should COVI server store its datasets?"
+            print "In which directory is AFNI installed?"
             valid = False
-            default = config["datadir"]
+            default = config["afnidir"]
             while not valid:
                 print "[%s] "%(default),
                 inp = raw_input()
@@ -157,258 +186,233 @@ class SvrSocketMgr(threading.Thread):
                 
                 if inp == '':
                     inp = default
-                    if not os.path.exists(inp):
-                        os.mkdir(inp)
-                        
+            
                 if os.access(inp, os.W_OK):
-                    valid = True
+                    ok = os.access(os.path.join(inp,'afni'), os.R_OK)
+                    ok = ok and os.access(os.path.join(inp,'suma'), os.R_OK)
+                    valid = ok
                 else:
-                    sys.stderr.write("Could not write to directory %s. Check your input and try again.\n"%(inp))
-            config['datadir'] = inp
+                    sys.stderr.write("Could not read AFNI and/or SUMA in directory %s. Check your input and try again.\n"%(inp))
+            config['afnidir'] = inp
             
-            
-            print "Are AFNI/SUMA installed?"
+        else:
+            print ("COVI server needs AFNI/SUMA installed to create datasets. If you already have COVI datasets"+
+                "and do not want to create any new ones,")
+            print "you do not need to install AFNI/SUMA. Disable creation of new datasets?"
             out = self.yn_input()
             if out == 'y':
-                
-                print "In which directory is AFNI installed?"
-                valid = False
-                default = config["afnidir"]
-                while not valid:
-                    print "[%s] "%(default),
-                    inp = raw_input()
-                    inp.strip()
-                    
-                    if inp == '':
-                        inp = default
-                
-                    if os.access(inp, os.W_OK):
-                        ok = os.access(os.path.join(inp,'afni'), os.R_OK)
-                        ok = ok and os.access(os.path.join(inp,'suma'), os.R_OK)
-                        valid = ok
-                    else:
-                        sys.stderr.write("Could not read AFNI and/or SUMA in directory %s. Check your input and try again.\n"%(inp))
-                config['afnidir'] = inp
-                
+                # If user doesn't want it, disable processing pipeline
+                config['afnidir'] = ''
             else:
-                print ("COVI server needs AFNI/SUMA installed to create datasets. If you already have COVI datasets"+
-                    "and do not want to create any new ones,")
-                print "you do not need to install AFNI/SUMA. Disable creation of new datasets?"
-                out = self.yn_input()
-                if out == 'y':
-                    # If user doesn't want it, disable processing pipeline
-                    config['afnidir'] = ''
-                else:
-                    # Otherwise, die
-                    print 'Please install AFNI/SUMA and run COVI server configuration again.'
-                    sys.exit(1)
-            
-                
-            ### TEST ALL THIS OMGOMGOMG ###
-                
-            # Database creation
-            try:
-                conn = sqlite3.connect("COVI_svr.db")
-                conn.text_factory = str
-            except:
-                print "Could not connect to COVI_svr.db. Make sure COVI can access this file."
+                # Otherwise, die
+                print 'Please install AFNI/SUMA and run COVI server configuration again.'
                 sys.exit(1)
-            c = conn.cursor()
+        
             
-            c.execute('''CREATE TABLE IF NOT EXISTS users
-                        (uid text CONSTRAINT uid_constraint PRIMARY KEY,
-                        passhash text,
-                        admin integer);''')
+        ### TEST ALL THIS OMGOMGOMG ###
+            
+        # Database creation
+        try:
+            conn = sqlite3.connect("COVI_svr.db")
+            conn.text_factory = str
+        except sqlite3.OperationalError:
+            print "Could not connect to COVI_svr.db. Make sure COVI can access this file."
+            sys.exit(1)
+        
+    
+        c = conn.cursor()
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS users
+                    (uid text CONSTRAINT uid_constraint PRIMARY KEY,
+                    passhash text,
+                    admin integer);''')
+        conn.commit()
+        c.execute('''CREATE TABLE IF NOT EXISTS dataset
+                    (did integer CONSTRAINT did_constraint PRIMARY KEY ASC AUTOINCREMENT,
+                    metadata text,
+                    path text,
+                    owner text CONSTRAINT owner_constraint REFERENCES users (uid) ON DELETE CASCADE ON UPDATE CASCADE)''')
+        conn.commit()
+        
+        create_usr = "INSERT INTO users VALUES (?, ?, ?);"
+        
+        # User setup
+        if conn.execute("SELECT * FROM users WHERE uid='admin'").fetchall():
+            print "Administrator already exists, continuing with adding users."
+        else:
+            print "Administrator Account"
+            print "The Administrator can add, change, or remove any dataset administrated by COVI Server."
+            print "The user name for the administrator account is admin. Enter a password for the administrator account."
+            
+            passwd = self.pass_input()
+            
+            c.execute(create_usr, ('admin', sha256(passwd).hexdigest(), 1))
             conn.commit()
-            c.execute('''CREATE TABLE IF NOT EXISTS dataset
-                        (did integer CONSTRAINT did_constraint PRIMARY KEY ASC AUTOINCREMENT,
-                        metadata text,
-                        path text,
-                        owner text CONSTRAINT owner_constraint REFERENCES users (uid) ON DELETE CASCADE ON UPDATE CASCADE)''')
-            conn.commit()
             
-            create_usr = "INSERT INTO users VALUES (?, ?, ?);"
+            if not os.path.exists(os.path.join(config['datadir'], 'admin')):
+                os.mkdir(os.path.join(config['datadir'],'admin'))
             
-            # User setup
-            if conn.execute("SELECT * FROM users WHERE uid='admin'").fetchall():
-                print "Administrator already exists, continuing with adding users."
-            else:
-                print "Administrator Account"
-                print "The Administrator can add, change, or remove any dataset administrated by COVI Server."
-                print "The user name for the administrator account is admin. Enter a password for the administrator account."
+            print "Admin account successfully configured"
+            
+        print "Do you want to add other users at this time?"
+        out = self.yn_input()
+        
+        while out == 'y':
+            valid = False
+            while not valid:
+                print "Username: ",
+                inp = raw_input()
+                inp.strip()
                 
+                if len(inp) > 0 and len(inp) < 31 and re.match("^[A-Za-z0-9]{3,30}$", inp):
+                    user = inp
+                    valid = True
+                else:
+                    print "Username must be alphanumeric and between 3 and 30 characters."
+                if conn.execute("SELECT * FROM users WHERE uid=?", [user]):
+                    print "Cannot add user: user with that username already exists."
+                    continue
                 passwd = self.pass_input()
-                
-                c.execute(create_usr, ('admin', sha256(passwd).hexdigest(), 1))
-                conn.commit()
-                
-                if not os.path.exists(os.path.join(config['datadir'], 'admin')):
-                    os.mkdir(os.path.join(config['datadir'],'admin'))
-                
-                print "Admin account successfully configured"
-                
+                try:
+                    c.execute(create_usr, (user, sha256(passwd).hexdigest(), 0))
+                    conn.commit()
+                    if not os.path.exists(os.path.join(config['datadir'], user)):
+                        os.mkdir(os.path.join(config['datadir'], user))
+                except sqlite3.IntegrityError:
+                    print "Cannot add user: user with that username already exists."
             print "Do you want to add other users at this time?"
             out = self.yn_input()
-            
-            while out == 'y':
-                valid = False
-                while not valid:
-                    print "Username: ",
-                    inp = raw_input()
-                    inp.strip()
-                    
-                    if len(inp) > 0 and len(inp) < 31 and re.match("^[A-Za-z0-9]{3,30}$", inp):
-                        user = inp
-                        valid = True
-                    else:
-                        print "Username must be alphanumeric and between 3 and 30 characters."
-                    if conn.execute("SELECT * FROM users WHERE uid=?", [user]):
-                        print "Cannot add user: user with that username already exists."
-                        continue
-                    passwd = self.pass_input()
-                    try:
-                        c.execute(create_usr, (user, sha256(passwd).hexdigest(), 0))
-                        conn.commit()
-                        if not os.path.exists(os.path.join(config['datadir'], user)):
-                            os.mkdir(os.path.join(config['datadir'], user))
-                    except sqlite3.IntegrityError:
-                        print "Cannot add user: user with that username already exists."
-                print "Do you want to add other users at this time?"
-                out = self.yn_input()
-            
+        
 
-            print "Which port should COVI Server use to listen for connections?"
-            print "You will need to make sure this port is open in your firewall."
-            print "Choose a port between 1024 and 65536. Default is 14338."
-            valid = False
-            default = config["svrport"]
-            while not valid:
-                print "[%s] "%(str(default)),
-                inp = raw_input()
-                inp.strip()
-                # If user accepted default, set their input to the default
-                if inp == '':
-                    inp = default
-                    
-                # If not, try to interpret their input
-                try:
-                    inp = int(inp)
-                    if inp <= 65536 and inp >= 1024:
-                        try:
-                            testsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                            testsock.bind((socket.gethostname(), inp))
-                            testsock.close()
-                        except socket.error as e:
-                            print e
-                            print type(e)
-                            print "Could not bind server to port %i. Choose another port."%(inp)
-                            continue
-                            
-                        valid = True
-                except Exception as e:
-                    print e
-                    pass
+        print "Which port should COVI Server use to listen for connections?"
+        print "You will need to make sure this port is open in your firewall."
+        print "Choose a port between 1024 and 65536. Default is 14338."
+        valid = False
+        default = config["svrport"]
+        while not valid:
+            print "[%s] "%(str(default)),
+            inp = raw_input()
+            inp.strip()
+            # If user accepted default, set their input to the default
+            if inp == '':
+                inp = default
                 
-                if not valid:
-                    print "Input must be an integer between 1024 and 65536."
-            config['svrport'] = inp
-                    
-            print "What host name would you like COVI Server to use?"
-            print "If you don't have your own SSL certificate, you probably don't need to change this."
-            default = socket.gethostname()
-            valid = False
-            while not valid:
-                print "[%s] "%(default),
-                inp = raw_input()
-                inp.strip()
-                if inp == '':
-                    inp = default
-                try:
-                    print (inp, config['svrport'])
-                    testsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    testsock.bind((inp, config['svrport']))
-                    testsock.close()
-                    
-                    valid = True
-                except socket.gaierror:
-                    print "Could not find host name %s. Make sure the host name you're using is associated ",
-                    print "with this computer."
-                    valid = False # just making sure
-            
-            config['hostname'] = inp
-            
-            
-                    
-            print "COVI Server uses SSL to ensure the security of communications between the server and clients."
-            print "To use this protocol, COVI Server needs an SSL certificate. Would you like to generate an SSL ",
-            print "certificate now?"
-            out = self.yn_input()
-            
-            ### FINISH CERTIFICATE STUFF ##
-            if out == 'y':
-                ret = subprocess.call("openssl req -new -x509 -days 365 -nodes -out cert.pem -keyout cert.pem".split())
-                while ret != 0:
-                    print "\nCould not generate a certificate. Please try again."
-                    ret = subprocess.call("openssl req -new -x509 "+
-                                          "-days 365 -nodes -out cert.pem -keyout cert.pem".split())
-                cert = 'cert.pem'
-                pkey = ''
-            else:
-                valid = False
-                while not valid:
-                    print "Which file would you like to use for your certificate?"
-                    cert = self.dir_input()
-                    
-                    print "Is your private key included in the certificate file?"
-                    out = self.yn_input()
-                    
-                    if out == 'n':
-                        print "Which file would you like to use for your private key?"
-                        pkey = self.dir_input()
-                    else:
-                        pkey = ''
-                        
+            # If not, try to interpret their input
+            try:
+                inp = int(inp)
+                if inp <= 65536 and inp >= 1024:
                     try:
-                        svrsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        svrsock.bind((config['hostname'], config['svrport']))
-                        svrsock.listen(5)
+                        testsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        testsock.bind((socket.gethostname(), inp))
+                        testsock.close()
+                    except socket.error as e:
+                        print e
+                        print full_name(e)
+                        print "Could not bind server to port %i. Choose another port."%(inp)
+                        continue
                         
-                        """
-                        if pkey:
-                            ssl.wrap_socket(svrsock, keyfile=pkey, certfile=cert, server_side=True)
-                        else:
-                            ssl.wrap_socket(svrsock, certfile=cert, server_side=True)
-                        
-                        
-                        clientsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        ssl.wrap_socket(clientsock, cert_reqs=ssl.CERT_REQUIRED)
-                        clientsock.connect((config['hostname'], config['svrport']))
-                        svrsock.close()
-                        """
-                        #TODO: Figure out some way of validating a certificate that is reasonable
-                        valid = True
-                        
-                    except ssl.SSLError:
-                        print "There is a problem with either the certificate file or the key file."
-                        print "Please specify alternate files."
-                        valid = False
-                        
-            config['cert'] = cert
-            config['pkey'] = pkey
+                    valid = True
+            # If we didn't get an int, just pass
+            except ValueError as e:
+                pass
+            
+            if not valid:
+                print "Input must be an integer between 1024 and 65536."
+        config['svrport'] = inp
                 
-                # Test input values
+        print "What host name would you like COVI Server to use?"
+        print "If you don't have your own SSL certificate, you probably don't need to change this."
+        default = socket.gethostname()
+        valid = False
+        while not valid:
+            print "[%s] "%(default),
+            inp = raw_input()
+            inp.strip()
+            if inp == '':
+                inp = default
+            try:
+                print (inp, config['svrport'])
+                testsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                testsock.bind((inp, config['svrport']))
+                testsock.close()
                 
+                valid = True
+            except socket.gaierror:
+                print "Could not find host name %s. Make sure the host name you're using is associated ",
+                print "with this computer."
+                valid = False # just making sure
+        
+        config['hostname'] = inp
+        
+        
+                
+        print "COVI Server uses SSL to ensure the security of communications between the server and clients."
+        print "To use this protocol, COVI Server needs an SSL certificate. Would you like to generate an SSL ",
+        print "certificate now?"
+        out = self.yn_input()
+        
+        ### FINISH CERTIFICATE STUFF ##
+        if out == 'y':
+            ret = subprocess.call("openssl req -new -x509 -days 365 -nodes -out cert.pem -keyout cert.pem".split())
+            while ret != 0:
+                print "\nCould not generate a certificate. Please try again."
+                ret = subprocess.call("openssl req -new -x509 "+
+                                      "-days 365 -nodes -out cert.pem -keyout cert.pem".split())
+            cert = 'cert.pem'
+            pkey = ''
+        else:
+            valid = False
+            while not valid:
+                print "Which file would you like to use for your certificate?"
+                cert = self.dir_input()
+                
+                print "Is your private key included in the certificate file?"
+                out = self.yn_input()
+                
+                if out == 'n':
+                    print "Which file would you like to use for your private key?"
+                    pkey = self.dir_input()
+                else:
+                    pkey = ''
                     
-            config['COVIdir'] = os.getcwd()
+                try:
+                    svrsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    svrsock.bind((config['hostname'], config['svrport']))
+                    svrsock.listen(5)
+                    
+                    """
+                    if pkey:
+                        ssl.wrap_socket(svrsock, keyfile=pkey, certfile=cert, server_side=True)
+                    else:
+                        ssl.wrap_socket(svrsock, certfile=cert, server_side=True)
+                    
+                    
+                    clientsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    ssl.wrap_socket(clientsock, cert_reqs=ssl.CERT_REQUIRED)
+                    clientsock.connect((config['hostname'], config['svrport']))
+                    svrsock.close()
+                    """
+                    #TODO: Figure out some way of validating a certificate that is reasonable
+                    valid = True
+                    
+                except ssl.SSLError:
+                    print "There is a problem with either the certificate file or the key file."
+                    print "Please specify alternate files."
+                    valid = False
+                    
+        config['cert'] = cert
+        config['pkey'] = pkey
             
-            conf_file = open('COVI_svr.conf', 'w')
-            json.dump(config, conf_file)
-            conf_file.close()
+            # Test input values
             
-            print "Configuration file was written successfully! You can now start using server by relaunching it."
-        except Exception as e:
-            self.fatal_error('configuration', e)
-            return
+                
+        config['COVIdir'] = os.getcwd()
+        
+        conf_file = open('COVI_svr.conf', 'w')
+        json.dump(config, conf_file)
+        conf_file.close()
+        
+        print "Configuration file was written successfully! You can now start using server by relaunching it."
             
     def run(self):
         # Start the server
@@ -454,6 +458,7 @@ class SvrSocketMgr(threading.Thread):
             #self.client_threads[-1]
             try:
                 self.client_threads[-1].start()
+            ## Does this actually catch anything?
             except Exception as e:
                 err_str = "Thread %s: run: experienced a fatal error %s"%(
                                               self.client_threads[-1].name,
@@ -506,7 +511,8 @@ class CThreadException(Exception):
     def __init__(self, message=''):
         self.message = message
         
-class ClientThread(threading.Thread):
+#class ClientThread(threading.Thread):
+class ClientThread(Process):
     '''
     The class that deals with requests from clients.
     '''
@@ -518,7 +524,7 @@ class ClientThread(threading.Thread):
     cont = True
     
     def __init__(self, client_socket, config):
-        threading.Thread.__init__(self)
+        Process.__init__(self)
         self.v = config['verbose']
         self.client_socket = client_socket
         self.dispatch = {
@@ -623,9 +629,9 @@ class ClientThread(threading.Thread):
                 if self.v: print "Thread %s trying to decode data"%(self.name)
                 req = json.loads(enc_req)
                 if self.v: print "Thread %s request is: %s"%(self.name, str(req))
-            except:
+            except ValueError:
                 # Got bad data. Ignore it, keep looping
-                self.req_fail("it was not a valid JSON request")
+                self.req_fail("it was not a valid request")
                 if self.v: print "Thread %s failed to decode data"%(self.name)
                 continue
             try:
@@ -640,10 +646,12 @@ class ClientThread(threading.Thread):
                 self.req_fail("it was not a valid COVI request")
                 if self.v: print "Thread %s error getting message type: %s"%(self.name, str(e))
                 continue
+            # TODO: Catching "Exception" here
             except Exception as e:
-                if self.v: print "Thread %s encountered an exception while processing a %s request: %s"%(
+                if self.v: 
+                    print "Thread %s encountered an exception while processing a %s request: %s."%(
                                                                         self.name, req['type'], str(e))
-                self.req_fail("there was an error while processing the %s request: %s"%(
+                self.req_fail(("there was an error while processing the %s request: %s")%(
                                                                         req['type'], str(e)))
                 return
             # Once we're done processing the input, close when the program closes
@@ -653,8 +661,9 @@ class ClientThread(threading.Thread):
         
     def req_fail(self, message, prefix=True):
         if prefix:
-            self.client_socket.send('{ "covi-response": { "type":"req fail",'+
-                                    ' "message":"Your request could not be executed because %s." } }'%(message))
+            self.client_socket.send(('{ "covi-response": { "type":"req fail",'+
+                                    ' "message":"Your request could not be executed because %s.'+
+                                    'Try your request again." } }')%(message))
         else:
             self.client_socket.send('{ "covi-response": { "type":"req fail",'+
                                     ' "message":"%s" } }'%(message))
@@ -711,7 +720,7 @@ class ClientThread(threading.Thread):
             md5 = req['md5']
         except Exception as e:
             if self.v: print "Thread %s: new dset: invalid data in new dset request%s: %s"%(self.name, 
-                                                                                            type(e).__name__, 
+                                                                                            full_name(e), 
                                                                                             str(e))
             self.req_fail("it is not a valid new dataset request")
             return
@@ -736,7 +745,7 @@ class ClientThread(threading.Thread):
                  
             except Exception as e:
                 if self.v: print "Thread %s: new dset: failed to create file/dir for new dset%s: %s"%(self.name, 
-                                                                                              type(e).__name__, 
+                                                                                              full_name(e), 
                                                                                               str(e))
                 self.req_fail('your dataset could not be written to disk')
                 raise CThreadException()
@@ -904,7 +913,7 @@ class ClientThread(threading.Thread):
             old = os.path.join(self.permissions['userdir'],self.leaf(req['old']))
             new = os.path.join(self.permissions['userdir'],self.leaf(req['new']))
         except Exception as e:
-            if self.v: print "Thread %s: rename: invalid data in rename request: %s: %s"%(self.name, type(e).__name__, str(e))
+            if self.v: print "Thread %s: rename: invalid data in rename request: %s: %s"%(self.name, full_name(e), str(e))
             self.req_fail("it is not a valid rename request")
             return
         
@@ -922,7 +931,7 @@ class ClientThread(threading.Thread):
             dset = self.leaf(req['dset'])
         except Exception as e:
             if self.v: print "Thread %s: remove: invalid data in remove request: %s: %s"%(self.name, 
-                                                                                 type(e).__name__, 
+                                                                                 full_name(e), 
                                                                                  str(e))
             self.req_fail("it is not a valid remove request")
             return
@@ -931,7 +940,7 @@ class ClientThread(threading.Thread):
             shutil.rmtree(os.path.join(self.permissions['userdir'], dset))
         except:
             if self.v: print "Thread %s: remove: could not delete dataset: %s: %s"%(self.name, 
-                                                                                    type(e).__name__, 
+                                                                                    full_name(e), 
                                                                                     str(e))
             self.req_fail("dataset %s could not be removed"%(dset))
             return
