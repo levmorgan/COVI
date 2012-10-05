@@ -1,5 +1,6 @@
-import struct
-import re
+import struct, re
+from collections import defaultdict
+
 
 def parse_triangle_file(file_str):
     """
@@ -48,7 +49,7 @@ def parse_triangle_file(file_str):
         
         for i in xrange(face_count):
             index = 12*i+vert_count
-            faces[i] = struct.unpack(">3f", file_str[i:i+12])
+            faces[i] = struct.unpack(">3f", file_str[index:index+12])
 
         return (comment, vert_count, face_count, verts, faces)
 
@@ -62,17 +63,64 @@ def parse_triangle_file(file_str):
 
         
 
-def parse_aparc_file(file_str):
-    num_nodes = struct.unpack('>I', infi.read(4))
-    num_nodes = num_nodes[0]
+def parse_annot_file(file_str):
+    """
+    Parse a string containing a FreeSurfer annot file and return its contents.
+    
+    Returns:
+    (
+        labels: a map keyed on each region's label containing lists of vertices
+        tab_file: the name of the file that the color table came from
+        color_table: a map keyed on the brain area's name, with a list
+            of color values
 
-    labels = defaultdict(list)
 
-    for i in xrange(num_nodes):
-        ### THIS IS NOT A FILE! IT'S A STRING! THIS IS MADNESS!
-        raw_dat = infi.read(8)
-        if len(raw_dat) == 8:
-            dat = struct.unpack('>II', raw_dat)
+    """
+    try:
+        num_nodes = struct.unpack('>I', file_str[:4])
+        num_nodes = num_nodes[0]
+
+        labels = defaultdict(list)
+
+        file_str = file_str[4:]
+
+        for i in xrange(num_nodes):
+            dat = struct.unpack('>II', file_str[i*8:i*8+8])
             labels[dat[1]].append(dat[0])
 
-    return labels
+        offset = 8*num_nodes
+        has_table, = struct.unpack('>I', file_str[offset:offset+4])
+        if not has_table:
+            return labels, None, None
+
+        # Read in the file name for the color table
+        offset += 4
+        num_entries, tab_file_len,  = struct.unpack('>2I', file_str[offset:offset+8])
+        offset += 8
+        tab_file, = struct.unpack('>%isx'%(tab_file_len-1), file_str[offset:offset+tab_file_len])
+
+        offset += tab_file_len
+        color_table = {}
+
+        if num_entries > 0:
+            # Read in the color table data
+            for i in xrange(num_entries):
+                # Read in the length of the brain area name
+                str_len, = struct.unpack('>I', file_str[offset:offset+4])
+                offset += 4
+                # Read in the name and the 4 integers of color values
+                tab_row = struct.unpack('>%isx4I'%(str_len-1), file_str[offset:offset+str_len+16])
+                # color_table["brain area name] = [int R, int G, int B, int A(?)]
+                color_table[tab_row[0]] = list(tab_row[1:])
+                offset += str_len+16
+        else:
+            raise ValueError("Fewer than 0 entries in the color table! We can't handle that yet!")
+
+            
+        return labels, tab_file, color_table
+
+    except struct.error:
+        raise ValueError("Invalid data was encountered in the aparc file.")
+
+    except IndexError:
+        raise ValueError("The aparc file is truncated or missing data.")
