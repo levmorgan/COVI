@@ -264,10 +264,11 @@ class SvrSocketMgr(threading.Thread):
             try:
                 c.execute('''CREATE TABLE shared_files 
                             (owner REFERENCES users (uid) ON DELETE CASCADE,
-                            sharee REFERENCES users (uid) ON DELETE CASCADE,
+                            recipient REFERENCES users (uid) ON DELETE CASCADE,
                             dataset TEXT,
                             can_write INTEGER,
-                            can_share INTEGER);''')
+                            can_share INTEGER,
+                            is_request INTEGER);''')
                 conn.commit()
 
                 valid = True
@@ -331,7 +332,7 @@ class SvrSocketMgr(threading.Thread):
                     valid = True
                 else:
                     print "Username must be alphanumeric and between 3 and 30 characters."
-                if conn.execute("SELECT * FROM users WHERE uid=?", [user]):
+                if conn.execute("SELECT * FROM users WHERE uid=?", [user]).fetchall():
                     print "Cannot add user: user with that username already exists."
                     continue
                 passwd = self.pass_input()
@@ -599,6 +600,8 @@ class ClientThread(Process):
                             "keepalive":self.keepalive,
                             "list":self.list,
                             None:"""
+                            "share":self.share,
+                            "copy":self.copy,
                             "resubmit":self.resubmit,
                             """
                          }
@@ -900,6 +903,53 @@ class ClientThread(Process):
             if type(e) != CThreadException:
                 if self.v: print "Thread %s: new dset: caught non-CThread Exception; passing it on"%(self.name)
                 raise
+            
+    def share(self, req):
+        if self.v: print "Thread %s: share request: trying to get dset metadata"%(self.name)
+        try:
+            recip = req['recipient']
+            dset = self.leaf(req['dset'])
+            write = int(req['write']) 
+            share = int(req['share']) 
+            
+            assert (write == 0 or write == 1) and (share == 0 or share == 1)
+        except (KeyError, AssertionError):
+            if self.v: print "Thread %s: share request: invalid data in share request"%(self.name)
+            self.req_fail("it is not a valid share request")
+            return
+        
+        if recip == self.permissions['uid']:
+            self.req_fail("you can't share a dataset with yourself")
+        
+        # Fetch permissions
+        try:    
+            if self.v: print "Thread %s: auth: trying to add share request to database"%(self.name)
+            conn = sqlite3.connect("COVI_svr.db", timeout=20)
+            
+            res = conn.execute('INSERT INTO shared_files VALUES (?, ?, ?, ?, ?, ?)', 
+                               [self.permissions['uid'],
+                                recip, dset, write, share, 1])
+            if res and len(res) == 3:
+                if self.v: print "Thread %s: auth: auth ok"%(self.name)
+                self.permissions = {'uid':res[0], 'admin':res[2]}
+                userdir = os.path.join(
+                                   self.config['COVIdir'],
+                                   self.config['datadir'],
+                                   self.permissions['uid']
+                                   )
+                self.permissions['userdir'] = userdir
+                self.req_ok()
+            else:
+                if self.v: print "Thread %s: auth: auth failed"%(self.name)
+                self.req_fail("Username or password could not be authenticated", prefix=False)
+                return
+                
+        
+        except Exception as e:
+            if self.v: print "Thread %s: auth: auth failed, DB error: %s"%(self.name, str(e))
+            self.req_fail("of a database error")
+            return
+        
         
     def matrix(self, req):
         if self.v: print "Thread %s: matrix request: trying to get dset metadata"%(self.name)
