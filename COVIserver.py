@@ -3,18 +3,15 @@ Created on Aug 1, 2012
 
 @author: lmorgan
 '''
-import sys, os, re, subprocess
-import ssl, sqlite3, threading, socket, json
-import signal
+import sys, os, re, subprocess, ssl, hashlib, tarfile
+import sqlite3, threading, socket, json, signal, shutil
 from getpass import unix_getpass
 from hashlib import sha256
 from traceback import print_exc
 from getopt import getopt, GetoptError
-import hashlib
 from shutil import rmtree
+from collections import defaultdict
 #from time import sleep
-import tarfile
-import shutil
 from multiprocessing import Process
 
 svr_socket_manager = ''
@@ -26,9 +23,9 @@ def full_name(obj):
     return obj.__module__ + '.' + obj.__class__.name
 
 class SvrSocketMgr(threading.Thread):
-    '''
+    """
     This is the driver class for the server. It sets up the server and manages sockets/threads.
-    '''
+    """
     svr_socket = ''
     config = {}
     client_sockets = []
@@ -36,32 +33,48 @@ class SvrSocketMgr(threading.Thread):
     conn = ''
     cont = True
     
-    errors = {IOError:'IO error', sqlite3.Error:'database error'}
-    
-    def yn_input(self):
+    def yn_input(self, default='Y'):
         valid = False
         out = ''
         while not valid:
-            print "[Y]/n: ",
+            if re.match('[Yy]',default):
+                defout = 'y'
+                print "[Y]/n: ",
+            elif re.match('[Nn]',default):
+                defout = 'n'
+                print "y/[N]: ",
+            elif default == '':
+                defout = ''
+                print 'y/n: ',
+            
             inp = raw_input()
             inp.strip()
             if re.search('[Nn]', inp):
                 out = 'n'
                 valid = True
                 return 'n'
-            elif inp == '' or re.search('[Yy]', inp):
+            elif re.search('[Yy]', inp):
                 out = 'y'
                 valid = True
+            elif inp == '' and defout:
+                out = defout
+                valid = True
+                
             else:
                 print "Please enter Y or n."
         return out
     
-    def dir_input(self):
+    def dir_input(self, default=''):
         valid = False
         while not valid:
+            if default:
+                print "[%s]: "%default,
             inp = raw_input()
             inp.strip()
-                    
+            
+            if default and not inp:
+                inp = default        
+            
             if os.access(inp, os.R_OK):
                 valid = True
             else:
@@ -146,7 +159,7 @@ class SvrSocketMgr(threading.Thread):
             home = os.popen('echo ~').read().strip()
             config = {
                       "datadir":"datasets", "svrport":14338, "afnidir":os.path.join(home, "abin"),
-                      "hostname":socket.gethostname(), "cert":None, "pkey":None,
+                      "hostname":socket.gethostname(), "cert":'', "pkey":'',
                       }
 
         print "COVI Server Configuration\n\n"
@@ -222,17 +235,66 @@ class SvrSocketMgr(threading.Thread):
     
         c = conn.cursor()
         
-        c.execute('''CREATE TABLE IF NOT EXISTS users
-                    (uid text CONSTRAINT uid_constraint PRIMARY KEY,
-                    passhash text,
-                    admin integer);''')
-        conn.commit()
+        valid = False
+        # FIXME: Make exception handler respond intelligently to duplicate tables.
+        # FIXME: Right now it would fail if users was a duplicate, or just repeat the previous error.
+        while not valid:
+            try:
+                c.execute('''CREATE TABLE users
+                            (uid text CONSTRAINT uid_constraint PRIMARY KEY,
+                            passhash text,
+                            admin integer);''')
+                
+                valid = True
+            except sqlite3.OperationalError as e:
+                tab_name = re.sub(r'^table (.*) already exists$', '\\1', e.message)
+                if tab_name != e.message: # If the message matches the regex
+                    print "COVI has encountered an error during configuration:"
+                    print e.message
+                    print "If you keep the table, it may leave the database in an inconsistent state."
+                    print "Delete and re-create table? Any data in the table will be lost."
+                    inp = self.yn_input(default='')
+                    if inp == 'y':
+                        c.execute("DROP TABLE ?;", tab_name) 
+                        conn.commit()
+                    else:
+                        valid = True
+        valid = False
+        while not valid:
+            try:
+                c.execute('''CREATE TABLE shared_files 
+                            (owner REFERENCES users (uid) ON DELETE CASCADE,
+                            sharee REFERENCES users (uid) ON DELETE CASCADE,
+                            dataset TEXT,
+                            can_write INTEGER,
+                            can_share INTEGER);''')
+                conn.commit()
+
+                valid = True
+
+            except sqlite3.OperationalError as e:
+                tab_name = re.sub(r'^table (.*) already exists$', '\\1', e.message)
+                if tab_name != e.message: # If the message matches the regex
+                    print "COVI has encountered an error during configuration:"
+                    print e.message
+                    print "If you keep the table, it may leave the database in an inconsistent state."
+                    print "Delete and re-create table? Any data in the table will be lost."
+                    inp = self.yn_input(default='')
+                    if inp == 'y':
+                        c.execute("DROP TABLE ?;", tab_name) 
+                        conn.commit()
+                    else:
+                        valid = True
+
+
+        """
         c.execute('''CREATE TABLE IF NOT EXISTS dataset
                     (did integer CONSTRAINT did_constraint PRIMARY KEY ASC AUTOINCREMENT,
                     metadata text,
                     path text,
                     owner text CONSTRAINT owner_constraint REFERENCES users (uid) ON DELETE CASCADE ON UPDATE CASCADE)''')
         conn.commit()
+        """
         
         create_usr = "INSERT INTO users VALUES (?, ?, ?);"
         
@@ -347,7 +409,7 @@ class SvrSocketMgr(threading.Thread):
         
                 
         print "COVI Server uses SSL to ensure the security of communications between the server and clients."
-        print "To use this protocol, COVI Server needs an SSL certificate. Would you like to generate an SSL ",
+        print "To use this protocol, COVI Server needs an SSL certificate. Would you like to generate an SSL",
         print "certificate now?"
         out = self.yn_input()
         
@@ -363,8 +425,8 @@ class SvrSocketMgr(threading.Thread):
         else:
             valid = False
             while not valid:
-                print "Which file would you like to use for your certificate?"
-                cert = self.dir_input()
+                print "Which file would you like to use for your certificate?" 
+                cert = self.dir_input(default=config['cert'])
                 
                 print "Is your private key included in the certificate file?"
                 out = self.yn_input()
