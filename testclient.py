@@ -90,6 +90,25 @@ def rename(sock):
    res = handle_response(sock.recv())
    if res: print "Rename successful!"
 
+def share(sock):
+    sock.send(json.dumps({ "covi-request": { "type":"share", "dset":"fakedset2", "recipient":"bob", "write":0, "share":0 } }))
+    res = handle_response(sock.recv())
+    if res: print "Share successful!"
+
+def share_to_self(sock):
+    sock.send(json.dumps({ "covi-request": { "type":"share", "dset":"fakedset2", "recipient":"lev", "write":0, "share":0 } }))
+    res = handle_response(sock.recv())
+    if res: print "Share successful!"
+
+
+def share_duplicate(sock):
+    sock.send(json.dumps({ "covi-request": { "type":"share", "dset":"fakedset2", "recipient":"bob", "write":0, "share":0 } }))
+    res = sock.recv()
+    print res
+    res = handle_response(res)
+    if res: print "Share successful!"
+
+
 def remove(sock):
    sock.send(json.dumps({ "covi-request": { "type":"remove", "dset":"fakedset2" } }))
    res = handle_response(sock.recv())
@@ -153,6 +172,12 @@ print "Requesting an invalid matrix"
 matrix_req(secclisock, bad=True)
 print "Trying rename"
 rename(secclisock)
+print "Trying share"
+share(secclisock)
+print "Trying share to self"
+share_to_self(secclisock)
+print "Trying duplicate share"
+share_duplicate(secclisock)
 print "Removing dataset"
 remove(secclisock)
 

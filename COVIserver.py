@@ -253,9 +253,9 @@ class SvrSocketMgr(threading.Thread):
                     print e.message
                     print "If you keep the table, it may leave the database in an inconsistent state."
                     print "Delete and re-create table? Any data in the table will be lost."
-                    inp = self.yn_input(default='')
+                    inp = self.yn_input(default='n')
                     if inp == 'y':
-                        c.execute("DROP TABLE ?;", tab_name) 
+                        c.execute("DROP TABLE users;") 
                         conn.commit()
                     else:
                         valid = True
@@ -280,9 +280,9 @@ class SvrSocketMgr(threading.Thread):
                     print e.message
                     print "If you keep the table, it may leave the database in an inconsistent state."
                     print "Delete and re-create table? Any data in the table will be lost."
-                    inp = self.yn_input(default='')
+                    inp = self.yn_input(default='n')
                     if inp == 'y':
-                        c.execute("DROP TABLE ?;", tab_name) 
+                        c.execute("DROP TABLE shared_files;") 
                         conn.commit()
                     else:
                         valid = True
@@ -599,14 +599,24 @@ class ClientThread(Process):
                             "remove":self.remove,
                             "keepalive":self.keepalive,
                             "list":self.list,
-                            None:"""
                             "share":self.share,
+                            None:"""
+                            
                             "copy":self.copy,
                             "resubmit":self.resubmit,
                             """
                          }
         self.config = config
-        self.permissions = ''
+        self.permissions = {}
+        
+    def update_dset_list(self):
+        if not 'uid' in self.permissions:
+            raise CThreadException("user is not yet authenticated")
+        userdir = self.permissions["userdir"]
+        dset_list = [name for name in os.listdir(userdir) 
+            if os.path.isdir(os.path.join(userdir,name))]
+        self.permissions["datasets"] = dset_list
+            
         
     def try_recv(self, bufsize=2048):
         try:
@@ -704,20 +714,22 @@ class ClientThread(Process):
                 req = req['covi-request']
                 if not self.permissions:
                     if req['type'] != 'auth':
-                        self.req_fail("your client is not authenticated yet")
+                        self.req_fail("the client is not authenticated yet")
                 self.dispatch[req['type']](req)
             except KeyError as e:
                 # Bad message. Ignore it.
-                self.req_fail("it was not a valid COVI request")
-                if self.v: print "Thread %s error getting message type: %s"%(self.name, str(e))
+                self.req_fail("COVI does not know how to handle a %s request"%str(req['type']))
+                #if self.v: print "Thread %s error handling message of type: %s"%(self.name, str(e))
+                if self.v: print "Thread %s error: COVI does not know how to handle a %s request"%(self.name,
+                                                                                            str(req['type']))
                 continue
             # TODO: Catching "Exception" here
             except Exception as e:
                 if self.v: 
-                    print "Thread %s encountered an exception while processing a %s request: %s."%(
+                    print "Thread %s encountered an uncaught exception while processing a %s request: %s. "%(
                                                                         self.name, req['type'], str(e))
-                self.req_fail(("there was an error while processing the %s request: %s")%(
-                                                                        req['type'], str(e)))
+                self.req_fail("there was an uncaught error while processing the %s request: %s "
+                              %(req['type'], str(e)))
                 return
             # Once we're done processing the input, close when the program closes
         
@@ -727,7 +739,7 @@ class ClientThread(Process):
     def req_fail(self, message, prefix=True):
         if prefix:
             self.client_socket.send(('{ "covi-response": { "type":"req fail",'+
-                                    ' "message":"Your request could not be executed because %s.'+
+                                    ' "message":"Your request could not be executed because %s. '+
                                     'Try your request again." } }')%(message))
         else:
             self.client_socket.send('{ "covi-response": { "type":"req fail",'+
@@ -920,35 +932,32 @@ class ClientThread(Process):
         
         if recip == self.permissions['uid']:
             self.req_fail("you can't share a dataset with yourself")
+            return
         
-        # Fetch permissions
         try:    
-            if self.v: print "Thread %s: auth: trying to add share request to database"%(self.name)
+            if self.v: print "Thread %s: share: trying to add share request to database"%(self.name)
             conn = sqlite3.connect("COVI_svr.db", timeout=20)
             
-            res = conn.execute('INSERT INTO shared_files VALUES (?, ?, ?, ?, ?, ?)', 
+            if conn.execute(
+                "SELECT * FROM shared_files WHERE owner=? AND recipient=? AND dataset=?;",
+                [self.permissions['uid'], recip, dset]).fetchall():
+                if self.v: print "Thread %s: share: duplicate share request"%(self.name)
+                self.req_fail("there is already a pending share request")
+                return
+            
+            conn.execute('INSERT INTO shared_files VALUES (?, ?, ?, ?, ?, ?)', 
                                [self.permissions['uid'],
                                 recip, dset, write, share, 1])
-            if res and len(res) == 3:
-                if self.v: print "Thread %s: auth: auth ok"%(self.name)
-                self.permissions = {'uid':res[0], 'admin':res[2]}
-                userdir = os.path.join(
-                                   self.config['COVIdir'],
-                                   self.config['datadir'],
-                                   self.permissions['uid']
-                                   )
-                self.permissions['userdir'] = userdir
-                self.req_ok()
-            else:
-                if self.v: print "Thread %s: auth: auth failed"%(self.name)
-                self.req_fail("Username or password could not be authenticated", prefix=False)
-                return
-                
+            conn.commit()
+            self.req_ok()
         
-        except Exception as e:
-            if self.v: print "Thread %s: auth: auth failed, DB error: %s"%(self.name, str(e))
+        except sqlite3.Error as e:
+            if self.v: print "Thread %s: share: share failed, DB error: %s"%(self.name, str(e))
             self.req_fail("of a database error")
             return
+        
+        
+            
         
         
     def matrix(self, req):
@@ -1005,14 +1014,23 @@ class ClientThread(Process):
         if self.v: print "Thread %s processing list request"%(self.name)
         userdir = self.permissions['userdir']
         if self.v: print "Thread %s: list: checking dir %s"%(self.name, userdir)
-        dset_list = [name for name in os.listdir(userdir) 
-                     if os.path.isdir(os.path.join(userdir,name))]
+        """dset_list = [name for name in os.listdir(userdir) 
+                     if os.path.isdir(os.path.join(userdir,name))]"""
+        dset_list = self.permissions["dset"]
+        shared = ''
+        requests = ''
         try:
             self.client_socket.send(
-                                    json.dumps(
-                                               { "covi-response": { "type":"list", "list":dset_list } }
-                                               )
-                                    )
+                json.dumps(
+                    { "covi-response": 
+                        { "type":"list", 
+                         "list":dset_list,
+                         "shared":shared,
+                         "requests":requests,
+                         } 
+                    }
+                )
+            )
             if self.v: print "Thread %s: list: sent list of length %i"%(self.name, len(dset_list))
         except Exception as e:
             if self.v: print "Thread %s: list: error while sending directory list: %e"%(self.name, str(e))
@@ -1032,9 +1050,13 @@ class ClientThread(Process):
         if self.v: print "Thread %s: rename: trying to rename dir"%(self.name)
         try:
             os.rename(old, new)
-        except Exception as e:
-            if self.v: print "Thread %s: rename: could not rename directory: %s"%(self.name, str(e))
-            self.req_fail("the dataset's directory could not be renamed")
+        except OSError as e:
+            if e[0] == 39:
+                if self.v: print "Thread %s: rename: dataset already exists"%(self.name)
+                self.req_fail("a dataset with that name already exists")
+            else:
+                if self.v: print "Thread %s: rename: could not rename directory: %s"%(self.name, str(e))
+                self.req_fail("the dataset's directory could not be renamed")
             return
         self.req_ok()
         
@@ -1048,9 +1070,25 @@ class ClientThread(Process):
             self.req_fail("it is not a valid remove request")
             return
         
-        try:
+        try:    
+            if self.v: 
+                print "Thread %s: share: trying to remove shares from the"%(self.name),
+                print "database for %s"%(dset)
+            conn = sqlite3.connect("COVI_svr.db", timeout=20)
+            
+            conn.execute(
+                'DELETE FROM shared_files WHERE owner=? AND dataset=?',
+                 [self.permissions['uid'], dset])
+            conn.commit()
+            
             shutil.rmtree(os.path.join(self.permissions['userdir'], dset))
-        except:
+            
+            
+        except sqlite3.Error as e:
+            if self.v: print "Thread %s: share: share failed, DB error: %s"%(self.name, str(e))
+            self.req_fail("of a database error")
+                
+        except OSError:
             if self.v: print "Thread %s: remove: could not delete dataset: %s: %s"%(self.name, 
                                                                                     full_name(e), 
                                                                                     str(e))
