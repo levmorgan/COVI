@@ -158,7 +158,7 @@ class SvrSocketMgr(threading.Thread):
         else:
             home = os.popen('echo ~').read().strip()
             config = {
-                      "datadir":"datasets", "svrport":14338, "afnidir":os.path.join(home, "abin"),
+                      "data_dir":"datasets", "svrport":14338, "afni_dir":os.path.join(home, "abin"),
                       "hostname":socket.gethostname(), "cert":'', "pkey":'',
                       }
 
@@ -167,7 +167,7 @@ class SvrSocketMgr(threading.Thread):
         
         print "In which directory should COVI server store its datasets?"
         valid = False
-        default = config["datadir"]
+        default = config["data_dir"]
         while not valid:
             print "[%s] "%(default),
             inp = raw_input()
@@ -182,7 +182,7 @@ class SvrSocketMgr(threading.Thread):
                 valid = True
             else:
                 sys.stderr.write("Could not write to directory %s. Check your input and try again.\n"%(inp))
-        config['datadir'] = inp
+        config['data_dir'] = inp
         
         
         print "Are AFNI/SUMA installed?"
@@ -191,7 +191,7 @@ class SvrSocketMgr(threading.Thread):
             
             print "In which directory is AFNI installed?"
             valid = False
-            default = config["afnidir"]
+            default = config["afni_dir"]
             while not valid:
                 print "[%s] "%(default),
                 inp = raw_input()
@@ -206,7 +206,7 @@ class SvrSocketMgr(threading.Thread):
                     valid = ok
                 else:
                     sys.stderr.write("Could not read AFNI and/or SUMA in directory %s. Check your input and try again.\n"%(inp))
-            config['afnidir'] = inp
+            config['afni_dir'] = inp
             
         else:
             print ("COVI server needs AFNI/SUMA installed to create datasets. If you already have COVI datasets"+
@@ -215,7 +215,7 @@ class SvrSocketMgr(threading.Thread):
             out = self.yn_input()
             if out == 'y':
                 # If user doesn't want it, disable processing pipeline
-                config['afnidir'] = ''
+                config['afni_dir'] = ''
             else:
                 # Otherwise, die
                 print 'Please install AFNI/SUMA and run COVI server configuration again.'
@@ -312,8 +312,8 @@ class SvrSocketMgr(threading.Thread):
             c.execute(create_usr, ('admin', sha256(passwd).hexdigest(), 1))
             conn.commit()
             
-            if not os.path.exists(os.path.join(config['datadir'], 'admin')):
-                os.mkdir(os.path.join(config['datadir'],'admin'))
+            if not os.path.exists(os.path.join(config['data_dir'], 'admin')):
+                os.mkdir(os.path.join(config['data_dir'],'admin'))
             
             print "Admin account successfully configured"
             
@@ -339,8 +339,8 @@ class SvrSocketMgr(threading.Thread):
                 try:
                     c.execute(create_usr, (user, sha256(passwd).hexdigest(), 0))
                     conn.commit()
-                    if not os.path.exists(os.path.join(config['datadir'], user)):
-                        os.mkdir(os.path.join(config['datadir'], user))
+                    if not os.path.exists(os.path.join(config['data_dir'], user)):
+                        os.mkdir(os.path.join(config['data_dir'], user))
                 except sqlite3.IntegrityError:
                     print "Cannot add user: user with that username already exists."
             print "Do you want to add other users at this time?"
@@ -469,7 +469,7 @@ class SvrSocketMgr(threading.Thread):
             # Test input values
             
                 
-        config['COVIdir'] = os.getcwd()
+        config['COVI_dir'] = os.getcwd()
         
         conf_file = open('COVI_svr.conf', 'w')
         json.dump(config, conf_file)
@@ -482,7 +482,7 @@ class SvrSocketMgr(threading.Thread):
         print "COVI Server is starting"
         
         try:
-            self.conn = sqlite3.connect(os.path.join(self.config['COVIdir'],"COVI_svr.db"), )
+            self.conn = sqlite3.connect(os.path.join(self.config['COVI_dir'],"COVI_svr.db"), )
         except sqlite3.Error as e:
             self.fatal_error('startup', e)
             return
@@ -609,15 +609,6 @@ class ClientThread(Process):
         self.config = config
         self.permissions = {}
         
-    def update_dset_list(self):
-        if not 'uid' in self.permissions:
-            raise CThreadException("user is not yet authenticated")
-        userdir = self.permissions["userdir"]
-        dset_list = [name for name in os.listdir(userdir) 
-            if os.path.isdir(os.path.join(userdir,name))]
-        self.permissions["datasets"] = dset_list
-            
-        
     def try_recv(self, bufsize=2048):
         try:
             data = self.client_socket.recv(2048)
@@ -715,14 +706,14 @@ class ClientThread(Process):
                 if not self.permissions:
                     if req['type'] != 'auth':
                         self.req_fail("the client is not authenticated yet")
-                self.dispatch[req['type']](req)
-            except KeyError as e:
-                # Bad message. Ignore it.
-                self.req_fail("COVI does not know how to handle a %s request"%str(req['type']))
-                #if self.v: print "Thread %s error handling message of type: %s"%(self.name, str(e))
-                if self.v: print "Thread %s error: COVI does not know how to handle a %s request"%(self.name,
-                                                                                            str(req['type']))
-                continue
+                if req["type"] in self.dispatch:
+                    self.dispatch[req['type']](req)
+                else:
+                    # Bad message. Ignore it.
+                    self.req_fail("COVI does not know how to handle a %s request"%str(req['type']))
+                    #if self.v: print "Thread %s error handling message of type: %s"%(self.name, str(e))
+                    if self.v: print "Thread %s error: COVI does not know how to handle a %s request"%(self.name,
+                                                                                                str(req['type']))
             # TODO: Catching "Exception" here
             except Exception as e:
                 if self.v: 
@@ -771,12 +762,12 @@ class ClientThread(Process):
             if res and len(res) == 3:
                 if self.v: print "Thread %s: auth: auth ok"%(self.name)
                 self.permissions = {'uid':res[0], 'admin':res[2]}
-                userdir = os.path.join(
-                                   self.config['COVIdir'],
-                                   self.config['datadir'],
+                user_dir = os.path.join(
+                                   self.config['COVI_dir'],
+                                   self.config['data_dir'],
                                    self.permissions['uid']
                                    )
-                self.permissions['userdir'] = userdir
+                self.permissions['user_dir'] = user_dir
                 self.req_ok()
             else:
                 if self.v: print "Thread %s: auth: auth failed"%(self.name)
@@ -803,7 +794,7 @@ class ClientThread(Process):
             return
         
         dset_dir = os.path.join(
-                                self.permissions["userdir"],
+                                self.permissions["user_dir"],
                                 dset
                                 )
         
@@ -929,7 +920,18 @@ class ClientThread(Process):
             if self.v: print "Thread %s: share request: invalid data in share request"%(self.name)
             self.req_fail("it is not a valid share request")
             return
+        dset_path = os.path.join(
+                                 self.permissions["dset_dir"],
+                                 self.leaf(dset)
+                                 )
+        if not os.path.exists(dset_path):
+            if self.v: print "Thread %s: share request: dataset %s does not exist"%(self.name, dset)
+            self.req_fail("dataset %s does not exist"%dset)
         
+        if not os.access(dset_path, os.R_OK):
+            if self.v: print "Thread %s: share request: don't have permissions to read %s"%(self.name, dset)
+            self.req_fail("COVI does not have permissions to read %s. Contact your administrator"%dset)
+            
         if recip == self.permissions['uid']:
             self.req_fail("you can't share a dataset with yourself")
             return
@@ -971,7 +973,7 @@ class ClientThread(Process):
             return
         
         dset_dir = os.path.join(
-                                self.permissions["userdir"],
+                                self.permissions["user_dir"],
                                 dset
                                 )
         
@@ -1012,13 +1014,30 @@ class ClientThread(Process):
         
     def list(self, req):
         if self.v: print "Thread %s processing list request"%(self.name)
-        userdir = self.permissions['userdir']
-        if self.v: print "Thread %s: list: checking dir %s"%(self.name, userdir)
-        """dset_list = [name for name in os.listdir(userdir) 
-                     if os.path.isdir(os.path.join(userdir,name))]"""
-        dset_list = self.permissions["dset"]
-        shared = ''
-        requests = ''
+        user_dir = self.permissions['user_dir']
+        if self.v: print "Thread %s: list: checking dir %s"%(self.name, user_dir)
+        dset_list = [name for name in os.listdir(user_dir) 
+                     if os.path.isdir(os.path.join(user_dir,name))]
+        self.permissions["dset_list"] = dset_list
+        shared = []
+        requests = []
+        # Get shared datasets and requests
+        try:    
+            if self.v: print "Thread %s: auth: trying to fetch auth info from database"%(self.name)
+            conn = sqlite3.connect("COVI_svr.db", timeout=20)
+            cur = conn.cursor()
+            
+            res = cur.execute('SELECT * FROM shared_files WHERE recipient=?', 
+                              self.permissions['uid']).fetchall()
+            # List comprehensions are fast
+            shared = [i for i in res if i[5] == 0]
+            requests = [i for i in res if i[5] == 1]
+            conn.close()
+        
+        except Exception as e:
+            if self.v: print "Thread %s: auth: auth failed, DB error: %s"%(self.name, str(e))
+            self.req_fail("of a database error")
+            return
         try:
             self.client_socket.send(
                 json.dumps(
@@ -1040,8 +1059,8 @@ class ClientThread(Process):
     def rename(self, req):
         if self.v: print "Thread %s: rename: trying to unpack old/new dset names"%(self.name)
         try:
-            old = os.path.join(self.permissions['userdir'],self.leaf(req['old']))
-            new = os.path.join(self.permissions['userdir'],self.leaf(req['new']))
+            old = os.path.join(self.permissions['user_dir'],self.leaf(req['old']))
+            new = os.path.join(self.permissions['user_dir'],self.leaf(req['new']))
         except Exception as e:
             if self.v: print "Thread %s: rename: invalid data in rename request: %s: %s"%(self.name, full_name(e), str(e))
             self.req_fail("it is not a valid rename request")
@@ -1081,7 +1100,7 @@ class ClientThread(Process):
                  [self.permissions['uid'], dset])
             conn.commit()
             
-            shutil.rmtree(os.path.join(self.permissions['userdir'], dset))
+            shutil.rmtree(os.path.join(self.permissions['user_dir'], dset))
             
             
         except sqlite3.Error as e:
