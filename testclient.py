@@ -108,11 +108,24 @@ def share_duplicate(sock):
     res = handle_response(res)
     if res: print "Share successful!"
 
+def copy(sock):
+    sock.send(json.dumps(
+        { "covi-request": { "type":"copy", "source":"fakedset2", "destination":"fakedset3", } }))
+    res = sock.recv()
+    print res
+    res = handle_response(res)
+    if res: print "Copy successful!"
+
+def copy_shared(sock):
+    sock.send(json.dumps(
+        { "covi-request": 
+            { "type":"copy shared", "source":"fakedset2", "destination":"fakedset3", "owner":"bob" } }))
 
 def remove(sock):
-   sock.send(json.dumps({ "covi-request": { "type":"remove", "dset":"fakedset2" } }))
-   res = handle_response(sock.recv())
-   if res: print "Remove successful!"
+    for i in {"fakedset2", "fakedset3"}:
+       sock.send(json.dumps({ "covi-request": { "type":"remove", "dset":i } }))
+       res = handle_response(sock.recv())
+       if res: print "Remove successful!"
 
 def close(sock):
    sock.send(json.dumps({ "covi-request": { "type":"close" } }))
