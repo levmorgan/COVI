@@ -1033,7 +1033,8 @@ class ClientThread(Process):
                 if reply["covi-request"]["type"] != "resp ok":
                     raise CThreadException("")
             except:
-                if self.v: print "Thread %s: matrix request: invalid data in response from client"%(self.name)
+                if self.v: 
+                    print "Thread %s: matrix request: invalid data in response from client"%(self.name)
                 self.req_fail("it is not a valid response")
                 return
             self.client_socket.send(data)
@@ -1044,7 +1045,8 @@ class ClientThread(Process):
             self.req_fail("matrix %i could not be opened"%(mat))
             return
         except Exception as e:
-            if self.v: print "Thread %s encountered an exception while opening/sending matrix: %s"%(self.name, str(e))
+            if self.v: 
+                print "Thread %s: matrix: error opening/sending matrix: %s"%(self.name, str(e))
             self.req_fail("there was an error reading or sending matrix %i"%(mat))
             return
         
@@ -1089,19 +1091,27 @@ class ClientThread(Process):
                     }
                 )
             )
-            if self.v: print "Thread %s: list: sent list of length %i"%(self.name, len(dset_list))
+            if self.v: 
+                print "Thread %s: list: sent list of length %i"%(self.name, len(dset_list))
         except Exception as e:
-            if self.v: print "Thread %s: list: error while sending directory list: %e"%(self.name, str(e))
+            if self.v: 
+                print "Thread %s: list: error while sending directory list: %e"%(
+                    self.name, str(e))
             return
             
         
     def rename(self, req):
+        '''
+        Rename a dataset from the name specified by req's "old" field to that specified 
+        by it's "new" field.
+        '''
         if self.v: print "Thread %s: rename: trying to unpack old/new dset names"%(self.name)
         try:
             old = os.path.join(self.permissions['user_dir'],self.leaf(req['old']))
             new = os.path.join(self.permissions['user_dir'],self.leaf(req['new']))
         except Exception as e:
-            if self.v: print "Thread %s: rename: invalid data in rename request: %s: %s"%(self.name, full_name(e), str(e))
+            if self.v: print "Thread %s: rename: invalid data in rename request: %s: %s"%(
+                self.name, full_name(e), str(e))
             self.req_fail("it is not a valid rename request")
             return
         
@@ -1119,6 +1129,11 @@ class ClientThread(Process):
         self.req_ok()
         
     def remove(self, req):
+        '''
+        Delete a dataset, specified by the dset field of req.
+        If it is shared with any other users, also remove references to the dataset
+        in the shared_files table.
+        '''
         try:
             dset = self.leaf(req['dset'])
         except KeyError as e:
@@ -1155,6 +1170,12 @@ class ClientThread(Process):
         self.req_ok()
         
     def copy(self, req):
+        '''
+        Handle a copy request or a copy shared request.
+        Copy a local or shared dataset, specified in the "source" field of the 
+        request, to a new dataset specified by the "destination" field.
+        If the dataset is shared, it is copied from datadir/owner/source  
+        '''
         try:
             source = req["source"]
             dest = req["destination"]
@@ -1172,6 +1193,7 @@ class ClientThread(Process):
         source_path = self.dset_path(dest)
         if shared:
             try:
+                # Make sure the dataset is shared with us before we try to copy it
                 if self.check_shared(owner, source):
                     dest_path = os.path.join(self.config["data_dir"], owner, source)
                 else:

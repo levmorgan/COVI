@@ -120,6 +120,11 @@ def copy_shared(sock):
     sock.send(json.dumps(
         { "covi-request": 
             { "type":"copy shared", "source":"fakedset2", "destination":"fakedset3", "owner":"bob" } }))
+    res = sock.recv()
+    print res
+    res = handle_response(res)
+    if res: print "Copy successful!"
+
 
 def remove(sock):
     for i in {"fakedset2", "fakedset3"}:
@@ -193,6 +198,10 @@ print "Trying duplicate share"
 share_duplicate(secclisock)
 print "Removing dataset"
 remove(secclisock)
+print "Trying a good copy"
+copy(secclisock)
+print "Trying a good share copy"
+copy_shared(secclisock)
 
 print "Closing connection"
 close(secclisock)
