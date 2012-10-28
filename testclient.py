@@ -13,6 +13,7 @@ def lst(sock):
     res = handle_response(sock.recv())
     if not res:
         return
+    """
     try:
         lst = res['list']
     except Exception as e:
@@ -21,6 +22,8 @@ def lst(sock):
 
     for i in lst:
         print i
+    """
+    print res
 
 def new_dset(sock):
     randf = open('fakedset1.tar.gz', 'rb')
@@ -104,7 +107,6 @@ def share_to_self(sock):
 def share_duplicate(sock):
     sock.send(json.dumps({ "covi-request": { "type":"share", "dset":"fakedset2", "recipient":"bob", "write":0, "share":0 } }))
     res = sock.recv()
-    print res
     res = handle_response(res)
     if res: print "Share successful!"
 
@@ -112,16 +114,14 @@ def copy(sock):
     sock.send(json.dumps(
         { "covi-request": { "type":"copy", "source":"fakedset2", "destination":"fakedset3", } }))
     res = sock.recv()
-    print res
     res = handle_response(res)
     if res: print "Copy successful!"
 
 def copy_shared(sock):
     sock.send(json.dumps(
         { "covi-request": 
-            { "type":"copy shared", "source":"fakedset2", "destination":"fakedset3", "owner":"bob" } }))
+            { "type":"copy shared", "source":"fakedset2", "destination":"fakedset4", "owner":"bob" } }))
     res = sock.recv()
-    print res
     res = handle_response(res)
     if res: print "Copy successful!"
 
@@ -130,7 +130,7 @@ def remove(sock):
     for i in {"fakedset2", "fakedset3"}:
        sock.send(json.dumps({ "covi-request": { "type":"remove", "dset":i } }))
        res = handle_response(sock.recv())
-       if res: print "Remove successful!"
+       if res: print "%s removed successfuly!"%(i)
 
 def close(sock):
    sock.send(json.dumps({ "covi-request": { "type":"close" } }))
@@ -167,44 +167,45 @@ print "Hit enter for SSL handshake"
 raw_input()
 secclisock.do_handshake()
 print "Handshake done"
-print "Sending good auth"
+print "\n\nSending good auth"
 auth_good(secclisock)
-print "Reply: "
+print "\n\nReply: "
 print secclisock.read()
 
-print "Trying list request"
+print "\n\nTrying list request"
 lst(secclisock)
 
-print "Sending new dset"
+print "\n\nSending new dset"
 new_dset(secclisock)
 
 """
-print "Sending bad auth"
+print "\n\nSending bad auth"
 auth_bad(secclisock)
-print "Reply: "
+print "\n\nReply: "
 print secclisock.read()
 """
-print "Requesting a matrix"
+print "\n\nRequesting a matrix"
 matrix_req(secclisock)
-print "Requesting an invalid matrix"
+print "\n\nRequesting an invalid matrix"
 matrix_req(secclisock, bad=True)
-print "Trying rename"
+print "\n\nTrying rename"
 rename(secclisock)
-print "Trying share"
+print "\n\nTrying share"
 share(secclisock)
-print "Trying share to self"
+print "\n\nTrying share to self"
 share_to_self(secclisock)
-print "Trying duplicate share"
+print "\n\nTrying duplicate share"
 share_duplicate(secclisock)
-print "Removing dataset"
-remove(secclisock)
-print "Trying a good copy"
+print "\n\nTrying a good copy"
 copy(secclisock)
-print "Trying a good share copy"
+print "\n\nTrying a good share copy"
 copy_shared(secclisock)
-
-print "Closing connection"
+print "\n\nRemoving datasets"
+remove(secclisock)
+"""
+print "\n\nClosing connection"
 close(secclisock)
 
 
 secclisock.close()
+"""

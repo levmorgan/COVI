@@ -9,7 +9,6 @@ from getpass import unix_getpass
 from hashlib import sha256
 from traceback import print_exc
 from getopt import getopt, GetoptError
-from shutil import rmtree
 from collections import defaultdict
 #from time import sleep
 from multiprocessing import Process
@@ -584,8 +583,8 @@ class CThreadException(Exception):
     def __init__(self, message=''):
         self.message = message
         
-#class ClientThread(threading.Thread):
 class ClientThread(Process):
+#class ClientThread(Process):
     '''
     The class that deals with requests from clients.
     '''
@@ -610,9 +609,11 @@ class ClientThread(Process):
                             "keepalive":self.keepalive,
                             "list":self.list,
                             "share":self.share,
+                            "copy":self.copy,
+                            "copy shared":self.copy,
                             None:"""
                             
-                            "copy":self.copy,
+                            
                             "resubmit":self.resubmit,
                             """
                          }
@@ -639,24 +640,27 @@ class ClientThread(Process):
             raise CThreadException("connection error")
             
         
-    def leaf(self, dir):
-        return os.path.basename(dir)
+    def leaf(self, path):
+        return os.path.basename(path)
     
     def check_shared(self, owner, dset):
         try:    
             if self.v: 
-                print "Thread %s: share: trying to remove shares from the"%(self.name),
-                print "database for %s"%(dset)
+                print "Thread %s: check_shared: checking if user %s shared %s"%(
+                    self.name, owner, dset),
+                print "with %s"%(self.permissions["uid"])
             conn = sqlite3.connect("COVI_svr.db", timeout=20)
             
             res = conn.execute(
                 'SELECT * FROM shared_files WHERE owner=? AND recipient=? AND dataset=?',
                  [owner, self.permissions['uid'], dset]).fetchall()
             
+            if self.v: print "Thread %s: check shared: res is:\n %s"%(self.name, str(res))
+            
             return res
             
         except sqlite3.Error as e:
-            if self.v: print "Thread %s: check shared: check failed, DB error: %s"%(self.name, str(e))
+            if self.v: print "Thread %s: check_shared: check failed, DB error: %s"%(self.name, str(e))
             self.req_fail("of a database error")
             raise
     
@@ -704,6 +708,7 @@ class ClientThread(Process):
             
             if self.v: print "Thread %s blocking on socket"%(self.name)
             try:
+                # Disable timeouts for debugging
                 timeouts = 0
                 enc_req = self.client_socket.recv()
             
@@ -813,16 +818,14 @@ class ClientThread(Process):
             return
             
     def new(self, req):
+        method = 'new'
         if self.v: print "Thread %s: new dset: trying to get dset metadata"%(self.name)
         try:
             dset = self.leaf(req['dset'])
             length = int(req['len'])
             md5 = req['md5']
-        except Exception as e:
-            if self.v: print "Thread %s: new dset: invalid data in new dset request%s: %s"%(self.name, 
-                                                                                            full_name(e), 
-                                                                                            str(e))
-            self.req_fail("it is not a valid new dataset request")
+        except KeyError as e:
+            self.handle_key_error(e, method)
             return
         
         dset_dir = os.path.join(
@@ -931,7 +934,7 @@ class ClientThread(Process):
             if self.v: print "Thread %s: new dset: cleaning up directories "%(self.name)
             if os.path.exists(dset_dir):
                 try:
-                    rmtree(dset_dir)
+                    shutil.rmtree(dset_dir)
                 except OSError:
                     #TODO: Notify an administrator about this
                     pass
@@ -940,6 +943,7 @@ class ClientThread(Process):
                 raise
             
     def share(self, req):
+        method = 'share'
         if self.v: print "Thread %s: share request: trying to get dset metadata"%(self.name)
         try:
             recip = req['recipient']
@@ -949,8 +953,7 @@ class ClientThread(Process):
             
             assert (write == 0 or write == 1) and (share == 0 or share == 1)
         except (KeyError, AssertionError):
-            if self.v: print "Thread %s: share request: invalid data in share request"%(self.name)
-            self.req_fail("it is not a valid share request")
+            self.handle_key_error(e, method)
             return
         """
         dset_path = os.path.join(
@@ -980,7 +983,7 @@ class ClientThread(Process):
                 "SELECT * FROM shared_files WHERE owner=? AND recipient=? AND dataset=?;",
                 [self.permissions['uid'], recip, dset]).fetchall():
                 if self.v: print "Thread %s: share: duplicate share request"%(self.name)
-                self.req_fail("there is already a pending share request")
+                self.req_fail("there is already a pending share request for that user and dataset")
                 return
             
             conn.execute('INSERT INTO shared_files VALUES (?, ?, ?, ?, ?, ?)', 
@@ -999,13 +1002,13 @@ class ClientThread(Process):
         
         
     def matrix(self, req):
+        method = 'matrix'
         if self.v: print "Thread %s: matrix request: trying to get dset metadata"%(self.name)
         try:
             dset = self.leaf(req['dset'])
             mat = int(req['number'])
-        except:
-            if self.v: print "Thread %s: matrix request: invalid data in matrix request"%(self.name)
-            self.req_fail("it is not a valid matrix request")
+        except KeyError as e:
+            self.handle_key_error(e, method)
             return
         
         dset_dir = os.path.join(
@@ -1035,7 +1038,7 @@ class ClientThread(Process):
             except:
                 if self.v: 
                     print "Thread %s: matrix request: invalid data in response from client"%(self.name)
-                self.req_fail("it is not a valid response")
+                self.req_fail("it was missing required fields")
                 return
             self.client_socket.send(data)
             
@@ -1051,6 +1054,7 @@ class ClientThread(Process):
             return
         
     def list(self, req):
+        method = 'list'
         if self.v: print "Thread %s processing list request"%(self.name)
         user_dir = self.permissions['user_dir']
         if self.v: print "Thread %s: list: checking dir %s"%(self.name, user_dir)
@@ -1075,7 +1079,7 @@ class ClientThread(Process):
             requests = [i for i in res if i[5] == 1]
             conn.close()
         
-        except Exception as e:
+        except sqlite3.Error as e:
             if self.v: print "Thread %s: list: listing failed, DB error: %s"%(self.name, str(e))
             self.req_fail("of a database error")
             return
@@ -1093,7 +1097,7 @@ class ClientThread(Process):
             )
             if self.v: 
                 print "Thread %s: list: sent list of length %i"%(self.name, len(dset_list))
-        except Exception as e:
+        except ssl.socket_error as e:
             if self.v: 
                 print "Thread %s: list: error while sending directory list: %e"%(
                     self.name, str(e))
@@ -1105,47 +1109,91 @@ class ClientThread(Process):
         Rename a dataset from the name specified by req's "old" field to that specified 
         by it's "new" field.
         '''
+        method = 'rename'
         if self.v: print "Thread %s: rename: trying to unpack old/new dset names"%(self.name)
         try:
-            old = os.path.join(self.permissions['user_dir'],self.leaf(req['old']))
-            new = os.path.join(self.permissions['user_dir'],self.leaf(req['new']))
-        except Exception as e:
-            if self.v: print "Thread %s: rename: invalid data in rename request: %s: %s"%(
-                self.name, full_name(e), str(e))
-            self.req_fail("it is not a valid rename request")
+            old = self.leaf(req['old'])
+            new = self.leaf(req['new'])
+            old_path = os.path.join(self.permissions['user_dir'], old)
+            new_path = os.path.join(self.permissions['user_dir'], new)
+            
+            if self.v: print "Thread %s: rename: trying to rename dir"%(self.name)
+            # If the file doesn't exist, we fail here, without touching the database
+            os.rename(old_path, new_path)
+            
+            if self.v: 
+                print "Thread %s: check_shared: checking if user %s shared %s"%(),
+                print "with %s"%(self.permissions["uid"])
+            conn = sqlite3.connect("COVI_svr.db", timeout=20)
+            
+            conn.execute(
+                'UPDATE shared_files SET dataset=? WHERE owner=? AND dataset=?',
+                 [old, self.permissions['uid']])
+            self.req_ok()
             return
         
-        if self.v: print "Thread %s: rename: trying to rename dir"%(self.name)
-        try:
-            os.rename(old, new)
-        except OSError as e:
-            if e[0] == 39:
-                if self.v: print "Thread %s: rename: dataset already exists"%(self.name)
-                self.req_fail("a dataset with that name already exists")
-            else:
-                if self.v: print "Thread %s: rename: could not rename directory: %s"%(self.name, str(e))
-                self.req_fail("the dataset's directory could not be renamed")
+        except (OSError, IOError) as e:
+            """
+                if e[0] == 39:
+                    if self.v: print "Thread %s: rename: dataset already exists"%(self.name)
+                    self.req_fail("a dataset with that name already exists")
+                else:
+                    if self.v: print "Thread %s: rename: could not rename directory: %s"%(self.name, str(e))
+                    self.req_fail("the dataset's directory could not be renamed")
+                return
+                """
+            self.handle_env_error(e, method)
+        except sqlite3.Error as e:
+            if self.v: print "Thread %s: rename: rename failed, DB error: %s"%(self.name, str(e))
+            self.req_fail("of a database error")
+        except KeyError as e:
+            self.handle_key_error(e, method)
+        finally:
             return
-        self.req_ok()
         
+    def handle_env_error(self, e, method):
+        '''
+        Give the necessary server output for various kinds of environment errors
+        Takes e, the error, and method, where the error came from
+        '''
+        print "Handling an error"
+        if e[0] == 39:
+            if self.v: print "Thread %s: %s: dataset already exists"%(self.name, method)
+            self.req_fail("a dataset with that name already exists")
+        elif e[0] == 2:
+            if self.v: print "Thread %s: %s: dataset does not exist"%(self.name, method)
+            self.req_fail("there is no dataset with that name")
+        else:
+            if self.v: print "Thread %s: %s: file operation failed: %s"%(self.name, method, str(e))
+            self.req_fail("COVI could not perform the necessary operations on the file system")
+        return
+    
+    def handle_key_error(self, e, method):
+        if self.v: 
+            print "Thread %s: rename: invalid data in %s request: %s: %s"%(
+                self.name, method, full_name(e), str(e))
+        self.req_fail("it was missing required fields for a %s request"%(method))
+            
     def remove(self, req):
         '''
         Delete a dataset, specified by the dset field of req.
         If it is shared with any other users, also remove references to the dataset
         in the shared_files table.
         '''
+        method = 'remove'
         try:
             dset = self.leaf(req['dset'])
         except KeyError as e:
-            if self.v: print "Thread %s: remove: invalid data in remove request: %s: %s"%(self.name, 
-                                                                                 full_name(e), 
-                                                                                 str(e))
-            self.req_fail("it is not a valid remove request")
+            self.handle_key_error(e, method)
             return
-        
+        dset_path = self.dset_path(dset)
+        if not os.path.exists(dset_path):
+            print "Thread %s: remove: error: dataset %s does not exist."%(self.name, dset)
+            self.req_fail('there is no dataset %s'%(dset))
+            
         try:    
             if self.v: 
-                print "Thread %s: share: trying to remove shares from the"%(self.name),
+                print "Thread %s: remove: trying to remove shares from the"%(self.name),
                 print "database for %s"%(dset)
             conn = sqlite3.connect("COVI_svr.db", timeout=20)
             
@@ -1155,21 +1203,27 @@ class ClientThread(Process):
             conn.commit()
             
             shutil.rmtree(os.path.join(self.permissions['user_dir'], dset))
-            
-            
+            self.req_ok()
+            return
+        
         except sqlite3.Error as e:
             if self.v: print "Thread %s: share: share failed, DB error: %s"%(self.name, str(e))
             self.req_fail("of a database error")
+            return
                 
-        except OSError as e:
+        except (OSError, IOError) as e:
+            """
             if self.v: print "Thread %s: remove: could not delete dataset: %s: %s"%(self.name, 
                                                                                     full_name(e), 
                                                                                     str(e))
-            self.req_fail("dataset %s could not be removed"%(dset))
+            self.req_fail("dataset %s could not be removed: %s"%(dset, e.message))
             return
-        self.req_ok()
+            """
+            self.handle_env_error(e, method)
+        
         
     def copy(self, req):
+        method = 'copy'
         '''
         Handle a copy request or a copy shared request.
         Copy a local or shared dataset, specified in the "source" field of the 
@@ -1179,26 +1233,30 @@ class ClientThread(Process):
         try:
             source = req["source"]
             dest = req["destination"]
+            shared = False
             
             if req["type"] == "copy shared":
                 shared = True
                 owner = req["owner"]
         except KeyError as e:
-            if self.v: print "Thread %s: copy: invalid data in copy request: %s: %s"%(self.name, 
-                                                                                 full_name(e), 
+            """if self.v: print "Thread %s: copy: invalid data in copy request: %s: %s"%(self.name, 
+                                                                          full_name(e), 
                                                                                  str(e))
             self.req_fail("it is missing required fields")
+            """
+            self.handle_key_error(e, method)
             return
         
-        source_path = self.dset_path(dest)
+        source_path = self.dset_path(source)
         if shared:
             try:
                 # Make sure the dataset is shared with us before we try to copy it
                 if self.check_shared(owner, source):
                     dest_path = os.path.join(self.config["data_dir"], owner, source)
                 else:
-                    if self.v: print "Thread %s: copy: dataset %s is not shared woth the user"%(self.name)
-                    self.req_fail("dataset %s is not shared with you")
+                    if self.v: print "Thread %s: copy: dataset %s is not shared with user"%(self.name, source)
+                    self.req_fail("dataset %s is not shared with you"%(source))
+                    return
             except sqlite3.Error:
                 # This was alredy handled
                 return
@@ -1206,9 +1264,13 @@ class ClientThread(Process):
         try:
             dest_path = self.dset_path(dest)
             shutil.copytree(source_path, dest_path)
-        except OSError:
-            if self.v: print "Thread %s: copy: could not copy dataset"%(self.name, str(e))
-            self.req_fail("the dataset could not be copied")
+            self.req_ok()
+        except OSError as e:
+            if self.v: 
+                print "Thread %s: copy: could not copy dataset: %s"%(self.name, str(e))
+                print "Source dir: %s"%(source_path)
+                print "Dest dir: %s"%(dest_path)
+            self.handle_env_error(e, method)
     
                     
     def keepalive(self, req):
