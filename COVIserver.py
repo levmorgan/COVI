@@ -3,6 +3,7 @@ Created on Aug 1, 2012
 
 @author: lmorgan
 '''
+#TODO: COVI Server must be run from the directory it's in. That's stupid. Make all file refs WRT COVI_dir
 import sys, os, re, subprocess, ssl, hashlib, tarfile
 import sqlite3, threading, socket, json, signal, shutil
 from getpass import unix_getpass
@@ -603,6 +604,7 @@ class ClientThread(Process):
                             "auth":self.auth,
                             "new":self.new,
                             "matrix":self.matrix,
+                            "shared matrix":self.matrix,
                             "close":self.close,
                             "rename":self.rename,
                             "remove":self.remove,
@@ -611,6 +613,7 @@ class ClientThread(Process):
                             "share":self.share,
                             "copy":self.copy,
                             "copy shared":self.copy,
+                            
                             None:"""
                             
                             
@@ -623,6 +626,12 @@ class ClientThread(Process):
     def dset_path(self, dset_name):
         return os.path.join(self.permissions["user_dir"],
                             self.leaf(dset_name))
+    def shared_dset_path(self, owner, dset):
+        return os.path.join(
+                            self.config['data_dir'],
+                            owner,
+                            self.leaf(dset)
+                            )
         
     def try_recv(self, bufsize=2048):
         try:
@@ -824,6 +833,7 @@ class ClientThread(Process):
             dset = self.leaf(req['dset'])
             length = int(req['len'])
             md5 = req['md5']
+            # FIXME: Dataset names must be alphanumeric+_-.
         except KeyError as e:
             self.handle_key_error(e, method)
             return
@@ -846,11 +856,12 @@ class ClientThread(Process):
                 os.makedirs(dset_dir)
                 dset_arch = open(os.path.join(dset_dir,'%s.tar.gz'%(dset)), 'wb')
                  
-            except Exception as e:
-                if self.v: print "Thread %s: new dset: failed to create file/dir for new dset%s: %s"%(self.name, 
+            except (OSError, IOError) as e:
+                '''if self.v: print "Thread %s: new dset: failed to create file/dir for new dset%s: %s"%(self.name, 
                                                                                               full_name(e), 
                                                                                               str(e))
-                self.req_fail('your dataset could not be written to disk')
+                self.req_fail('your dataset could not be written to disk')'''
+                self.handle_env_error(e, method)
                 raise CThreadException()
                 
             if self.v: print "Thread %s: new dset: sending metadata receipt OK"%(self.name)
@@ -952,8 +963,14 @@ class ClientThread(Process):
             share = int(req['share']) 
             
             assert (write == 0 or write == 1) and (share == 0 or share == 1)
-        except (KeyError, AssertionError):
+        except KeyError as e:
             self.handle_key_error(e, method)
+            return
+        except AssertionError as e:
+            if self.v: 
+                print "Thread %s: share: invalid value"%(self.name),
+                print  "for \"write\' or \"share\""
+            self.req_fail("write and share must be 0 or 1")
             return
         """
         dset_path = os.path.join(
@@ -964,11 +981,11 @@ class ClientThread(Process):
         """
         dset_path = self.dset_path(dset)
         if not os.path.exists(dset_path):
-            if self.v: print "Thread %s: share request: dataset %s does not exist"%(self.name, dset)
+            if self.v: print "Thread %s: share: dataset %s does not exist"%(self.name, dset)
             self.req_fail("dataset %s does not exist"%dset)
         
         if not os.access(dset_path, os.R_OK):
-            if self.v: print "Thread %s: share request: don't have permissions to read %s"%(self.name, dset)
+            if self.v: print "Thread %s: share: don't have permissions to read %s"%(self.name, dset)
             self.req_fail("COVI does not have permissions to read %s. Contact your administrator"%dset)
             
         if recip == self.permissions['uid']:
@@ -998,8 +1015,43 @@ class ClientThread(Process):
             return
         
         
+    def share_response(self, req):
+        method = 'share respsonse'
+        if self.v: print "Thread %s: share response: trying to get dset metadata"%(self.name)
+        try:
+            owner = req['owner']
+            dset = self.leaf(req['dset'])
+            response = req['response']
             
+            assert (response == 0 or response == 1)
+        except (KeyError, AssertionError):
+            self.handle_key_error(e, method)
+            return
+
+        if response:
+            stmt = "UPDATE shared_files SET request = 0 WHERE owner=? AND recipient=? AND dataset=?"
+        else:
+            stmt = "DELETE FROM shared_files WHERE owner=? AND recipient=? AND dataset=?"
         
+            
+        try:    
+            if self.v: 
+                print "Thread %s: share response: "%(self.name),
+                print "trying to add share response to database"
+            conn = sqlite3.connect("COVI_svr.db", timeout=20)
+            
+            conn.execute(
+                stmt,
+                [owner, self.permissions['uid'], dset])
+            conn.commit()
+            self.req_ok()
+                
+        except sqlite3.Error as e:
+            if self.v: print "Thread %s: share response: failed, DB error: %s"%(self.name, str(e))
+            self.req_fail("of a database error: %s"%(str(e)))
+        return
+        
+            
         
     def matrix(self, req):
         method = 'matrix'
@@ -1007,18 +1059,34 @@ class ClientThread(Process):
         try:
             dset = self.leaf(req['dset'])
             mat = int(req['number'])
-        except KeyError as e:
+            owner = ''
+            
+            if req['type'] == "shared matrix":
+                owner = req['owner']
+                
+        except (KeyError, ValueError) as e:
             self.handle_key_error(e, method)
             return
         
-        dset_dir = os.path.join(
+        """dset_path = os.path.join(
                                 self.permissions["user_dir"],
                                 dset
-                                )
+                                )"""
+        # If dset is not shared, load data from the local path
+        if not owner:
+            dset_path = self.dset_path(dset)
+        else:
+            try:
+                if self.check_shared(owner, dset):
+                    dset_path = self.shared_dset_path(owner, dset)
+            except sqlite3.Error:
+                # check_shared does the appropriate error reporting for us
+                return 
+                
         
         # TODO: Determine file format definitively
         try:
-            mat_file = open(os.path.join(dset_dir,'%i.covi'%(mat)))
+            mat_file = open(os.path.join(dset_path,'%i.covi'%(mat)))
             data = mat_file.read()
             mat_file.close()
             
@@ -1122,17 +1190,19 @@ class ClientThread(Process):
             os.rename(old_path, new_path)
             
             if self.v: 
-                print "Thread %s: check_shared: checking if user %s shared %s"%(),
-                print "with %s"%(self.permissions["uid"])
+                print "Thread %s: %s: renaming dataset %s in DB"%(self.name, method, old)
             conn = sqlite3.connect("COVI_svr.db", timeout=20)
             
             conn.execute(
                 'UPDATE shared_files SET dataset=? WHERE owner=? AND dataset=?',
-                 [old, self.permissions['uid']])
+                 [new, self.permissions['uid'], old])
             self.req_ok()
             return
         
+        except KeyError as e:
+            self.handle_key_error(e, method)
         except (OSError, IOError) as e:
+            # If the directory could not be renamed
             """
                 if e[0] == 39:
                     if self.v: print "Thread %s: rename: dataset already exists"%(self.name)
@@ -1142,21 +1212,24 @@ class ClientThread(Process):
                     self.req_fail("the dataset's directory could not be renamed")
                 return
                 """
+            print "Calling handle_env_error"
             self.handle_env_error(e, method)
         except sqlite3.Error as e:
             if self.v: print "Thread %s: rename: rename failed, DB error: %s"%(self.name, str(e))
             self.req_fail("of a database error")
-        except KeyError as e:
-            self.handle_key_error(e, method)
-        finally:
-            return
+            # If the DB part failed, undo the directory rename
+            try:
+                os.rename(new_path, old_path)
+            except:
+                #FIXME: This would be REALLY BAD. DB is in an INCONSISTENT STATE.
+                sys.stderr.write("ERROR: Renamed a dataset on disk but can't rename it in the DB or revert!!!")
         
     def handle_env_error(self, e, method):
         '''
         Give the necessary server output for various kinds of environment errors
-        Takes e, the error, and method, where the error came from
+        Takes e, an EnvironmentError, and method, a string describing the method where
+        the error originated
         '''
-        print "Handling an error"
         if e[0] == 39:
             if self.v: print "Thread %s: %s: dataset already exists"%(self.name, method)
             self.req_fail("a dataset with that name already exists")
@@ -1164,13 +1237,13 @@ class ClientThread(Process):
             if self.v: print "Thread %s: %s: dataset does not exist"%(self.name, method)
             self.req_fail("there is no dataset with that name")
         else:
-            if self.v: print "Thread %s: %s: file operation failed: %s"%(self.name, method, str(e))
-            self.req_fail("COVI could not perform the necessary operations on the file system")
+            if self.v: print "Thread %s: %s: failed to read or write file: %s"%(self.name, method, str(e))
+            self.req_fail("COVI could not perform the necessary reads or writes to the file system")
         return
     
     def handle_key_error(self, e, method):
         if self.v: 
-            print "Thread %s: rename: invalid data in %s request: %s: %s"%(
+            print "Thread %s: %s: invalid data in request: %s: %s"%(
                 self.name, method, full_name(e), str(e))
         self.req_fail("it was missing required fields for a %s request"%(method))
             
@@ -1220,6 +1293,25 @@ class ClientThread(Process):
             return
             """
             self.handle_env_error(e, method)
+        
+    def remove_shared(self, req):
+        method = 'remove shared'
+        try:
+            dset = req['dset']
+            owner = req['owner']
+        except KeyError as e:
+            self.handle_key_error(e, method)
+            return
+        
+        try:
+            conn = sqlite3.connect('COVI_svr.db', timeout=20)
+            conn.execute('DELETE FROM shared_files WHERE owner=? AND recipient=?'+
+                         'AND dataset=?',[owner, self.permissions['uid'], dset])
+            self.req_ok()
+        except sqlite3.Error as e:
+            if self.v: print "Thread %s: %s: share failed, DB error: %s"%(self.name, method, str(e))
+            self.req_fail("of a database error")
+            return
         
         
     def copy(self, req):
