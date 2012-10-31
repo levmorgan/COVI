@@ -1231,21 +1231,26 @@ class ClientThread(Process):
         the error originated
         '''
         if e[0] == 39:
-            if self.v: print "Thread %s: %s: dataset already exists"%(self.name, method)
+            if self.v: print "Thread %s: %s: dataset already exists: %s"%(self.name, method, str(e))
             self.req_fail("a dataset with that name already exists")
         elif e[0] == 2:
             if self.v: print "Thread %s: %s: dataset does not exist"%(self.name, method)
             self.req_fail("there is no dataset with that name")
+        elif e[0] == 17:
+            if self.v: print "Thread %s: %s: destination dataset already exists"%(self.name, method)
+            self.req_fail("the destination dataset already exists")
         else:
             if self.v: print "Thread %s: %s: failed to read or write file: %s"%(self.name, method, str(e))
-            self.req_fail("COVI could not perform the necessary reads or writes to the file system")
+            self.req_fail("COVI could not perform the necessary reads "+
+                          "or writes to the file system: %s"%(str(e)))
         return
     
     def handle_key_error(self, e, method):
         if self.v: 
             print "Thread %s: %s: invalid data in request: %s: %s"%(
                 self.name, method, full_name(e), str(e))
-        self.req_fail("it was missing required fields for a %s request"%(method))
+        self.req_fail("it was missing required fields "+
+                      "for a %s request: %s"%(method, str(e)))
             
     def remove(self, req):
         '''
