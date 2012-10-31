@@ -624,9 +624,18 @@ class ClientThread(Process):
         self.config = config
         self.permissions = {}
     
-    def dset_path(self, dset_name):
-        return os.path.join(self.permissions["user_dir"],
-                            self.leaf(dset_name))
+    def dset_path(self, dset, owner=''):
+        if owner:
+            return os.path.join(
+                              self.config['COVI_dir'],
+                              self.config['data_dir'],
+                              self.leaf(owner),
+                              self.leaf(dset)
+                              )
+        else:
+            return os.path.join(self.permissions["user_dir"],
+                                self.leaf(dset))
+            
     def shared_dset_path(self, owner, dset):
         return os.path.join(
                             self.config['data_dir'],
@@ -654,6 +663,16 @@ class ClientThread(Process):
     def leaf(self, path):
         return os.path.basename(path)
     
+    def check_writable(self, owner, dset):
+        '''
+        Return True if directory exists and is writable
+        '''
+        return os.access(
+                  self.dset_path(dset, owner),
+                  os.W_OK
+                 )
+        
+    
     def check_shared(self, owner, dset):
         '''
         Checks if a dataset, "dset", has been shared by "owner" to 
@@ -663,15 +682,7 @@ class ClientThread(Process):
         '''
         if self.permissions['admin']:
             # If the database exists, the admin can access it
-            if os.access(
-                         os.path.join(
-                                      self.config['COVI_dir'],
-                                      self.config['data_dir'],
-                                      self.leaf(owner),
-                                      self.leaf(dset)
-                                      ),
-                         os.W_OK
-                         ):
+            if self.check_writable(owner, dset):
                 return (owner, self.permissions['uid'], dset, 1, 0)
             else:
                 #TODO: Should this raise an exception?
@@ -871,10 +882,7 @@ class ClientThread(Process):
             self.handle_key_error(e, method)
             return
         
-        dset_dir = os.path.join(
-                                self.permissions["user_dir"],
-                                dset
-                                )
+        dset_dir = self.dset_path(dset)
         
         try:
             if self.v: print "Thread %s: new dset: creating directories"%(self.name)
@@ -1170,7 +1178,7 @@ class ClientThread(Process):
         user_dir = self.permissions['user_dir']
         if self.v: print "Thread %s: list: checking dir %s"%(self.name, user_dir)
         dset_list = [name for name in os.listdir(user_dir) 
-                     if os.path.isdir(os.path.join(user_dir,name))]
+                     if os.path.isdir(self.dset_path(dset))]
         self.permissions["dset_list"] = dset_list
         shared = []
         requests = []
@@ -1305,10 +1313,14 @@ class ClientThread(Process):
             
             if req['type'] == "remove admin":
                 owner = req['owner']
+                dset_path = self.dset_path(dset)
+            else:
+                dset_path = self.dset_path(dset)
+                
         except KeyError as e:
             self.handle_key_error(e, method)
             return
-        dset_path = self.dset_path(dset)
+        
         if not os.path.exists(dset_path):
             print "Thread %s: remove: error: dataset %s does not exist."%(self.name, dset)
             self.req_fail('there is no dataset %s'%(dset))
