@@ -663,14 +663,20 @@ class ClientThread(Process):
     def leaf(self, path):
         return os.path.basename(path)
     
-    def check_writable(self, owner, dset):
+    def check_writable(self, dset, owner=''):
         '''
         Return True if directory exists and is writable
         '''
-        return os.access(
-                  self.dset_path(dset, owner),
-                  os.W_OK
-                 )
+        if owner:
+            return os.access(
+                      self.dset_path(dset, owner),
+                      os.W_OK
+                     )
+        else:
+            return os.access(
+                      self.dset_path(dset),
+                      os.W_OK
+                     )
         
     
     def check_shared(self, owner, dset):
@@ -682,7 +688,7 @@ class ClientThread(Process):
         '''
         if self.permissions['admin']:
             # If the database exists, the admin can access it
-            if self.check_writable(owner, dset):
+            if self.check_writable(dset, owner):
                 return (owner, self.permissions['uid'], dset, 1, 0)
             else:
                 #TODO: Should this raise an exception?
@@ -1178,7 +1184,7 @@ class ClientThread(Process):
         user_dir = self.permissions['user_dir']
         if self.v: print "Thread %s: list: checking dir %s"%(self.name, user_dir)
         dset_list = [name for name in os.listdir(user_dir) 
-                     if os.path.isdir(self.dset_path(dset))]
+                     if os.path.isdir(self.dset_path(name))]
         self.permissions["dset_list"] = dset_list
         shared = []
         requests = []
@@ -1313,7 +1319,7 @@ class ClientThread(Process):
             
             if req['type'] == "remove admin":
                 owner = req['owner']
-                dset_path = self.dset_path(dset)
+                dset_path = self.dset_path(dset, owner)
             else:
                 dset_path = self.dset_path(dset)
                 
@@ -1321,22 +1327,25 @@ class ClientThread(Process):
             self.handle_key_error(e, method)
             return
         
-        if not os.path.exists(dset_path):
-            print "Thread %s: remove: error: dataset %s does not exist."%(self.name, dset)
-            self.req_fail('there is no dataset %s'%(dset))
+        if not os.access(dset_path, os.W_OK):
+            print "Thread %s: remove: error: dataset %s does not exist"%(self.name, dset),
+            print "or is not writable."
+            self.req_fail('dataset %s does not exist or is not writable'%(dset))
+            return
             
         try:    
             if self.v: 
                 print "Thread %s: remove: trying to remove shares from the"%(self.name),
                 print "database for %s"%(dset)
             conn = sqlite3.connect("COVI_svr.db", timeout=20)
-            
+            if not owner:
+                owner = self.permissions['uid']
             conn.execute(
                 'DELETE FROM shared_files WHERE owner=? AND dataset=?',
-                 [self.permissions['uid'], dset])
+                 [owner, dset])
             conn.commit()
             
-            shutil.rmtree(os.path.join(self.permissions['user_dir'], dset))
+            shutil.rmtree(os.path.join(dset_path))
             self.req_ok()
             return
         
