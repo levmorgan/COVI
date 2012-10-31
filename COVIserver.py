@@ -144,6 +144,7 @@ class SvrSocketMgr(threading.Thread):
                 
     
     def configure_svr(self):
+        # TODO: Break this up into different methods, so e.g. users could be added without reconfiguring the whole server
         try:
             open('COVIserver.py', 'r')
             
@@ -739,7 +740,7 @@ class ClientThread(Process):
             
             if self.v: print "Thread %s blocking on socket"%(self.name)
             try:
-                # Disable timeouts for debugging
+                #TODO: Re-enable timeouts when debugging is over
                 timeouts = 0
                 enc_req = self.client_socket.recv()
             
@@ -793,9 +794,16 @@ class ClientThread(Process):
             # Once we're done processing the input, close when the program closes
         
     def req_ok(self):
+        '''
+        Sends a message to the client that their request succeeded.
+        '''
         self.client_socket.send('{ "covi-response": { "type":"req ok" } }')
         
     def req_fail(self, message, prefix=True):
+        '''
+        Send a customizable message to the client informing them that their request failed.
+        If prefix is True, 'message' is inserted into a boilerplate error message.
+        '''
         if prefix:
             self.client_socket.send(('{ "covi-response": { "type":"req fail",'+
                                     ' "message":"Your request could not be executed because %s. '+
@@ -805,8 +813,11 @@ class ClientThread(Process):
                                     ' "message":"%s" } }'%(message))
         
     def auth(self, req):
-        # handle authentication
-        
+        '''
+        Checks to see if the 'username' and 'password' fields of req match any of the users
+        in the database. If they do, load their permissions.
+        '''
+        # TODO: Add an exception for administrators
         if self.v: 
             print "Thread %s: auth: beginning authentication handling"%(self.name)
         try:
@@ -1153,6 +1164,7 @@ class ClientThread(Process):
             return
         
     def list(self, req):
+        # TODO: Add a special case for administrators
         method = 'list'
         if self.v: print "Thread %s processing list request"%(self.name)
         user_dir = self.permissions['user_dir']
@@ -1290,6 +1302,9 @@ class ClientThread(Process):
         method = 'remove'
         try:
             dset = self.leaf(req['dset'])
+            
+            if req['type'] == "remove admin":
+                owner = req['owner']
         except KeyError as e:
             self.handle_key_error(e, method)
             return
