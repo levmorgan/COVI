@@ -265,9 +265,9 @@ class SvrSocketMgr(threading.Thread):
                 c.execute('''CREATE TABLE shared_files 
                             (owner REFERENCES users (uid) ON DELETE CASCADE,
                             recipient REFERENCES users (uid) ON DELETE CASCADE,
-                            dataset TEXT,
-                            can_write INTEGER,
-                            can_share INTEGER,
+                            dataset TEXT,'''
+                            #can_write INTEGER,
+                            +'''can_share INTEGER,
                             is_request INTEGER);''')
                 conn.commit()
 
@@ -644,7 +644,8 @@ class ClientThread(Process):
             self.req_fail('the connection timed out')
             raise CThreadException("connection timed out")
         except socket.error as e:
-            if self.v: print "Thread %s socket error while receiving: %s"%(self.name, str(e))
+            if self.v: 
+                print "Thread %s socket error while receiving: %s"%(self.name, str(e))
             self.req_fail('there was a connection error: %s'%(str(e)))
             raise CThreadException("connection error")
             
@@ -653,6 +654,27 @@ class ClientThread(Process):
         return os.path.basename(path)
     
     def check_shared(self, owner, dset):
+        '''
+        Checks if a dataset, "dset", has been shared by "owner" to 
+        the current user
+        Returns either the approprite record, a fabricated record (for admin), 
+        or an empty list
+        '''
+        if self.permissions['admin']:
+            # If the database exists, the admin can access it
+            if os.access(
+                         os.path.join(
+                                      self.config['COVI_dir'],
+                                      self.config['data_dir'],
+                                      self.leaf(owner),
+                                      self.leaf(dset)
+                                      ),
+                         os.W_OK
+                         ):
+                return (owner, self.permissions['uid'], dset, 1, 0)
+            else:
+                #TODO: Should this raise an exception?
+                return False
         try:    
             if self.v: 
                 print "Thread %s: check_shared: checking if user %s shared %s"%(
@@ -1055,7 +1077,7 @@ class ClientThread(Process):
         
     def matrix(self, req):
         method = 'matrix'
-        if self.v: print "Thread %s: matrix request: trying to get dset metadata"%(self.name)
+        if self.v: print "Thread %s: matrix: trying to get dset metadata"%(self.name)
         try:
             dset = self.leaf(req['dset'])
             mat = int(req['number'])
@@ -1079,6 +1101,15 @@ class ClientThread(Process):
             try:
                 if self.check_shared(owner, dset):
                     dset_path = self.shared_dset_path(owner, dset)
+                else:
+                    if self.v: 
+                        print "Thread %s: copy: dataset %s is not shared with user"%(self.name, dset),
+                        print "or it does not exist"
+                    
+                    self.req_fail("dataset %s is not shared with you or does not exist"%(dset))
+                    return
+                    
+                    
             except sqlite3.Error:
                 # check_shared does the appropriate error reporting for us
                 return 
@@ -1136,8 +1167,6 @@ class ClientThread(Process):
             if self.v: print "Thread %s: auth: trying to fetch auth info from database"%(self.name)
             conn = sqlite3.connect("COVI_svr.db", timeout=20)
             cur = conn.cursor()
-            print "uid:"
-            print self.permissions['uid']
             res = cur.execute('SELECT * FROM shared_files WHERE recipient=?', 
                               [self.permissions['uid']]).fetchall()
             
@@ -1351,8 +1380,11 @@ class ClientThread(Process):
                 if self.check_shared(owner, source):
                     dest_path = os.path.join(self.config["data_dir"], owner, source)
                 else:
-                    if self.v: print "Thread %s: copy: dataset %s is not shared with user"%(self.name, source)
-                    self.req_fail("dataset %s is not shared with you"%(source))
+                    if self.v: 
+                        print "Thread %s: copy: dataset %s is not shared with user"%(self.name, source),
+                        print "or it does not exist"
+                    
+                    self.req_fail("dataset %s is not shared with you or does not exist"%(source))
                     return
             except sqlite3.Error:
                 # This was alredy handled
