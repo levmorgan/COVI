@@ -614,6 +614,7 @@ class ClientThread(Process):
                             "share":self.share,
                             "copy":self.copy,
                             "copy shared":self.copy,
+                            "remove shared":self.remove_shared,
                             
                             None:"""
                             
@@ -828,6 +829,34 @@ class ClientThread(Process):
         else:
             self.client_socket.send('{ "covi-response": { "type":"req fail",'+
                                     ' "message":"%s" } }'%(message))
+            
+    def handle_env_error(self, e, method):
+        '''
+        Give the necessary server output for various kinds of environment errors
+        Takes e, an EnvironmentError, and method, a string describing the method where
+        the error originated
+        '''
+        if e[0] == 39:
+            if self.v: print "Thread %s: %s: dataset already exists: %s"%(self.name, method, str(e))
+            self.req_fail("a dataset with that name already exists")
+        elif e[0] == 2:
+            if self.v: print "Thread %s: %s: dataset does not exist"%(self.name, method)
+            self.req_fail("there is no dataset with that name")
+        elif e[0] == 17:
+            if self.v: print "Thread %s: %s: destination dataset already exists"%(self.name, method)
+            self.req_fail("the destination dataset already exists")
+        else:
+            if self.v: print "Thread %s: %s: failed to read or write file: %s"%(self.name, method, str(e))
+            self.req_fail("COVI could not perform the necessary reads "+
+                          "or writes to the file system: %s"%(str(e)))
+        return
+    
+    def handle_key_error(self, e, method):
+        if self.v: 
+            print "Thread %s: %s: invalid data in request: %s: %s"%(
+                self.name, method, full_name(e), str(e))
+        self.req_fail("it was missing required fields "+
+                      "for a %s request: %s"%(method, str(e)))
         
     def auth(self, req):
         '''
@@ -1278,34 +1307,6 @@ class ClientThread(Process):
             except:
                 #FIXME: This would be REALLY BAD. DB is in an INCONSISTENT STATE.
                 sys.stderr.write("ERROR: Renamed a dataset on disk but can't rename it in the DB or revert!!!")
-        
-    def handle_env_error(self, e, method):
-        '''
-        Give the necessary server output for various kinds of environment errors
-        Takes e, an EnvironmentError, and method, a string describing the method where
-        the error originated
-        '''
-        if e[0] == 39:
-            if self.v: print "Thread %s: %s: dataset already exists: %s"%(self.name, method, str(e))
-            self.req_fail("a dataset with that name already exists")
-        elif e[0] == 2:
-            if self.v: print "Thread %s: %s: dataset does not exist"%(self.name, method)
-            self.req_fail("there is no dataset with that name")
-        elif e[0] == 17:
-            if self.v: print "Thread %s: %s: destination dataset already exists"%(self.name, method)
-            self.req_fail("the destination dataset already exists")
-        else:
-            if self.v: print "Thread %s: %s: failed to read or write file: %s"%(self.name, method, str(e))
-            self.req_fail("COVI could not perform the necessary reads "+
-                          "or writes to the file system: %s"%(str(e)))
-        return
-    
-    def handle_key_error(self, e, method):
-        if self.v: 
-            print "Thread %s: %s: invalid data in request: %s: %s"%(
-                self.name, method, full_name(e), str(e))
-        self.req_fail("it was missing required fields "+
-                      "for a %s request: %s"%(method, str(e)))
             
     def remove(self, req):
         '''
@@ -1318,6 +1319,10 @@ class ClientThread(Process):
             dset = self.leaf(req['dset'])
             
             if req['type'] == "remove admin":
+                if not self.permissions['admin']:
+                    print "Thread %s: remove: error: user"%(self.name, dset),
+                    print 'used remove admin, but is not admin'
+                    self.req_fail("you are not an administrator")
                 owner = req['owner']
                 dset_path = self.dset_path(dset, owner)
             else:
