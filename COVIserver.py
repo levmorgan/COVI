@@ -614,6 +614,8 @@ class ClientThread(Process):
                             "copy":self.copy,
                             "copy shared":self.copy,
                             "remove shared":self.remove_shared,
+                            "remove admin":self.remove,
+                            "rename admin":self.rename,
                             
                             None:"""
                             
@@ -1263,10 +1265,19 @@ class ClientThread(Process):
         method = 'rename'
         if self.v: print "Thread %s: rename: trying to unpack old/new dset names"%(self.name)
         try:
+            
             old = self.leaf(req['old'])
             new = self.leaf(req['new'])
-            old_path = os.path.join(self.permissions['user_dir'], old)
-            new_path = os.path.join(self.permissions['user_dir'], new)
+            if req["type"] == "rename admin":
+                if not self.permissions['admin']:
+                    print "Thread %s: rename: error: user"%(self.name),
+                    print 'used rename admin, but is not admin'
+                    self.req_fail("you are not an administrator")
+                owner = req['owner']
+            else:
+                owner = self.permissions['uid']
+            old_path = self.dset_path(old, owner)
+            new_path = self.dset_path(new, owner)
             
             if self.v: print "Thread %s: rename: trying to rename dir"%(self.name)
             # If the file doesn't exist, we fail here, without touching the database
@@ -1278,7 +1289,7 @@ class ClientThread(Process):
             
             conn.execute(
                 'UPDATE shared_files SET dataset=? WHERE owner=? AND dataset=?',
-                 [new, self.permissions['uid'], old])
+                 [new, owner, old])
             self.req_ok()
             return
         
@@ -1319,13 +1330,14 @@ class ClientThread(Process):
             
             if req['type'] == "remove admin":
                 if not self.permissions['admin']:
-                    print "Thread %s: remove: error: user"%(self.name, dset),
+                    print "Thread %s: remove: error: user"%(self.name),
                     print 'used remove admin, but is not admin'
                     self.req_fail("you are not an administrator")
                 owner = req['owner']
                 dset_path = self.dset_path(dset, owner)
             else:
                 dset_path = self.dset_path(dset)
+                owner = ''
                 
         except KeyError as e:
             self.handle_key_error(e, method)

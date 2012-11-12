@@ -156,8 +156,27 @@ def handle_response(reply, no_json=False):
         return reply
 
     
+def rename_admin(sock, old='fakedset2', new='fakedset3', owner="bob", undo=True):
+    for i in xrange(2):
+        sock.send(json.dumps({ "covi-request": 
+            { "type":"rename admin", "owner":owner, "old":old, "new":new } }))
+        res = handle_response(sock.recv())
+        if res: print "%s/%s renamed successfuly!"%(owner,old)
+        if undo:
+            temp = old
+            old = new
+            new = temp
+        else:
+            break
+    
+    
 
-
+def remove_admin(sock, dset="fakedset4", owner="lev"):
+    sock.send(json.dumps({ "covi-request": 
+        { "type":"remove admin", "owner":owner, "dset":dset } }))
+    res = handle_response(sock.recv())
+    if res: print "%s/%s removed successfuly!"%(owner,dset)
+    
     
 
 clientsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -202,6 +221,10 @@ print "\n\nTrying a good share copy"
 copy_shared(secclisock)
 print "\n\nRemoving datasets"
 remove(secclisock)
+print "\n\nTrying rename admin"
+rename_admin(secclisock)
+print "\n\nTrying remove admin"
+remove_admin(secclisock)
 """
 print "\n\nClosing connection"
 close(secclisock)
