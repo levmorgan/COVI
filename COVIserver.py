@@ -807,6 +807,7 @@ class ClientThread(Process):
                 if self.v: 
                     print "Thread %s encountered an uncaught %s exception while processing a %s request: %s. "%(
                                                                         self.name, full_name(e), req['type'], str(e))
+                    print_exc()
                 self.req_fail("there was an uncaught %s error while processing the %s request: %s "
                               %(full_name(e), req['type'], str(e)))
                 continue
@@ -826,10 +827,10 @@ class ClientThread(Process):
         if prefix:
             self.client_socket.send(('{ "covi-response": { "type":"req fail",'+
                                     ' "message":"Your request could not be executed because %s. '+
-                                    'Try your request again." } }')%(message))
+                                    'Try your request again." } }')%(message.strip()))
         else:
             self.client_socket.send('{ "covi-response": { "type":"req fail",'+
-                                    ' "message":"%s" } }'%(message))
+                                    ' "message":"%s" } }'%(message.strip()))
             
     def handle_env_error(self, e, method):
         '''
@@ -925,8 +926,7 @@ class ClientThread(Process):
             try:
                 if os.path.exists(dset_dir):
                     if self.v: print "Thread %s: new dset: dataset already exists"%(self.name)
-                    self.req_fail("there is already a dataset with that name. If you want to resubmit it, "+
-                                  "use the resubmit function")
+                    self.req_fail("there is already a dataset with that name")
                     return
                     
                 print dset_dir
@@ -1220,7 +1220,7 @@ class ClientThread(Process):
         requests = []
         # Get shared datasets and requests
         try:    
-            if self.v: print "Thread %s: auth: trying to fetch auth info from database"%(self.name)
+            if self.v: print "Thread %s: list: trying to fetch list info from database"%(self.name)
             conn = sqlite3.connect("COVI_svr.db", timeout=20)
             cur = conn.cursor()
             res = cur.execute('SELECT * FROM shared_files WHERE recipient=?', 
