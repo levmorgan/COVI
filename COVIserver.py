@@ -266,9 +266,8 @@ class SvrSocketMgr(threading.Thread):
                 c.execute('''CREATE TABLE shared_files 
                             (owner REFERENCES users (uid) ON DELETE CASCADE,
                             recipient REFERENCES users (uid) ON DELETE CASCADE,
-                            dataset TEXT,'''
-                            #can_write INTEGER,
-                            +'''can_share INTEGER,
+                            dataset TEXT,
+                            can_share INTEGER,
                             is_request INTEGER);''')
                 conn.commit()
 
@@ -1079,9 +1078,9 @@ class ClientThread(Process):
                 self.req_fail("there is already a pending share request for that user and dataset")
                 return
             
-            conn.execute('INSERT INTO shared_files VALUES (?, ?, ?, ?, ?, ?)', 
+            conn.execute('INSERT INTO shared_files VALUES (?, ?, ?, ?, ?)', 
                                [self.permissions['uid'],
-                                recip, dset, write, share, 1])
+                                recip, dset, share, 1])
             conn.commit()
             self.req_ok()
         
@@ -1227,8 +1226,8 @@ class ClientThread(Process):
             
             
             # List comprehensions are fast
-            shared = [i for i in res if i[5] == 0]
-            requests = [i for i in res if i[5] == 1]
+            shared = [i for i in res if i[4] == 0]
+            requests = [i for i in res if i[4] == 1]
             conn.close()
         
         except sqlite3.Error as e:
