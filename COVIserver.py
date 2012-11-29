@@ -10,7 +10,7 @@ from getpass import unix_getpass
 from hashlib import sha256
 from traceback import print_exc
 from getopt import getopt, GetoptError
-from collections import defaultdict
+#from collections import defaultdict
 #from time import sleep
 from multiprocessing import Process
 

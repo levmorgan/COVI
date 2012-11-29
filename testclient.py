@@ -1,4 +1,22 @@
-import socket, ssl, json, array, os, hashlib, random
+import socket, ssl, json, array, os, hashlib, random, sys
+
+def handle_response(reply, no_json=False):
+    try:
+        reply = json.loads(reply)["covi-response"]
+    except:
+        if no_json:
+            return reply
+        else:
+            print "JSON fail!"
+            sys.exit(1)
+    if reply["type"] == "req fail":
+        print "request failed!"
+        print reply
+        return 0
+    elif reply["type"] == "req ok":
+        return 1
+    else:
+        return reply
 
 def auth_good(sock):
     req = { "covi-request": { "type":"auth", "username":"lev", "password":"lev" } }
@@ -127,34 +145,14 @@ def copy_shared(sock):
 
 
 def remove(sock):
-    for i in {"fakedset2", "fakedset3"}:
+    for i in ["fakedset2", "fakedset3"]:
        sock.send(json.dumps({ "covi-request": { "type":"remove", "dset":i } }))
        res = handle_response(sock.recv())
        if res: print "%s removed successfuly!"%(i)
 
 def close(sock):
    sock.send(json.dumps({ "covi-request": { "type":"close" } }))
-
-    
-
-def handle_response(reply, no_json=False):
-    try:
-        reply = json.loads(reply)["covi-response"]
-    except:
-        if no_json:
-            return reply
-        else:
-            print "JSON fail!"
-            sys.exit(1)
-    if reply["type"] == "req fail":
-        print "request failed!"
-        print reply
-        return 0
-    elif reply["type"] == "req ok":
-        return 1
-    else:
-        return reply
-
+   
     
 def rename_admin(sock, old='fakedset2', new='fakedset3', owner="bob", undo=True):
     for i in xrange(2):
@@ -168,7 +166,6 @@ def rename_admin(sock, old='fakedset2', new='fakedset3', owner="bob", undo=True)
             new = temp
         else:
             break
-    
     
 
 def remove_admin(sock, dset="fakedset4", owner="lev"):
