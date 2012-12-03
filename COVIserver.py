@@ -938,7 +938,6 @@ class ClientThread(Process):
                     self.req_fail("there is already a dataset with that name")
                     return
                     
-                print dset_dir
                 os.makedirs(dset_dir)
                 dset_arch = open(os.path.join(dset_dir,'%s.tar.gz'%(dset)), 'wb')
                  
