@@ -843,17 +843,20 @@ class ClientThread(Process):
                                                                      method,
                                                                      obj_type, 
                                                                      str(e))
-            self.req_fail("a dataset with that name already exists")
+            self.req_fail("a %s called %s already exists"%(obj_type, 
+                                                           e.filename))
         elif e[0] == 2:
             if self.v: print "Thread %s: %s: %s does not exist"%(self.name, 
                                                                  method,
                                                                  obj_type,)
-            self.req_fail("there is no dataset with that name")
+            self.req_fail("requested %s %s does not exist"%(obj_type, 
+                                                            e.filename))
         elif e[0] == 17:
             if self.v: print "Thread %s: %s: destination %s already exists"%(self.name, 
                                                                              method,
                                                                              obj_type,)
-            self.req_fail("the destination dataset already exists")
+            self.req_fail("the destination %s %s already exists"%(obj_type, 
+                                                                  e.filename))
         else:
             if self.v: print "Thread %s: %s: failed to read or write file: %s"%(self.name, 
                                                                                 method, 
@@ -1211,8 +1214,8 @@ class ClientThread(Process):
             self.req_fail("matrix %i could not be opened"%(mat))
             """
             if self.v: 
-                print "Thread %s could not open matrix,",
-                print " or matrix does not exist: %s"%(self.name, str(e))
+                print "Thread %s could not open matrix,"%(self.name),
+                print " or matrix does not exist: %s"%(str(e))
             self.handle_env_error(e, method, 'matrix')
             return
         except Exception as e:
