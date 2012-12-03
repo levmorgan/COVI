@@ -1048,7 +1048,7 @@ class ClientThread(Process):
             recip = req['recipient']
             dset = self.leaf(req['dset'])
             write = int(req['write']) 
-            share = int(req['share']) 
+            share = int(req['can share']) 
             
             assert (write == 0 or write == 1) and (share == 0 or share == 1)
         except KeyError as e:

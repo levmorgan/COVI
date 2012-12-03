@@ -112,18 +112,18 @@ def rename(sock):
    if res: print "Rename successful!"
 
 def share(sock):
-    sock.send(json.dumps({ "covi-request": { "type":"share", "dset":"fakedset2", "recipient":"bob", "write":0, "share":0 } }))
+    sock.send(json.dumps({ "covi-request": { "type":"share", "dset":"fakedset2", "recipient":"bob", "write":0, "can share":0 } }))
     res = handle_response(sock.recv())
     if res: print "Share successful!"
 
 def share_to_self(sock):
-    sock.send(json.dumps({ "covi-request": { "type":"share", "dset":"fakedset2", "recipient":"lev", "write":0, "share":0 } }))
+    sock.send(json.dumps({ "covi-request": { "type":"share", "dset":"fakedset2", "recipient":"lev", "write":0, "can share":0 } }))
     res = handle_response(sock.recv())
     if res: print "Share successful!"
 
 
 def share_duplicate(sock):
-    sock.send(json.dumps({ "covi-request": { "type":"share", "dset":"fakedset2", "recipient":"bob", "write":0, "share":0 } }))
+    sock.send(json.dumps({ "covi-request": { "type":"share", "dset":"fakedset2", "recipient":"bob", "write":0, "can share":0 } }))
     res = sock.recv()
     res = handle_response(res)
     if res: print "Share successful!"
