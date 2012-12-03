@@ -832,23 +832,32 @@ class ClientThread(Process):
             self.client_socket.send('{ "covi-response": { "type":"req fail",'+
                                     ' "message":"%s" } }'%(message.strip()))
             
-    def handle_env_error(self, e, method):
+    def handle_env_error(self, e, method, obj_type='dataset'):
         '''
         Give the necessary server output for various kinds of environment errors
         Takes e, an EnvironmentError, and method, a string describing the method where
         the error originated
         '''
         if e[0] == 39:
-            if self.v: print "Thread %s: %s: dataset already exists: %s"%(self.name, method, str(e))
+            if self.v: print "Thread %s: %s: %s already exists: %s"%(self.name, 
+                                                                     method,
+                                                                     obj_type, 
+                                                                     str(e))
             self.req_fail("a dataset with that name already exists")
         elif e[0] == 2:
-            if self.v: print "Thread %s: %s: dataset does not exist"%(self.name, method)
+            if self.v: print "Thread %s: %s: %s does not exist"%(self.name, 
+                                                                 method,
+                                                                 obj_type,)
             self.req_fail("there is no dataset with that name")
         elif e[0] == 17:
-            if self.v: print "Thread %s: %s: destination dataset already exists"%(self.name, method)
+            if self.v: print "Thread %s: %s: destination %s already exists"%(self.name, 
+                                                                             method,
+                                                                             obj_type,)
             self.req_fail("the destination dataset already exists")
         else:
-            if self.v: print "Thread %s: %s: failed to read or write file: %s"%(self.name, method, str(e))
+            if self.v: print "Thread %s: %s: failed to read or write file: %s"%(self.name, 
+                                                                                method, 
+                                                                                str(e))
             self.req_fail("COVI could not perform the necessary reads "+
                           "or writes to the file system: %s"%(str(e)))
         return
@@ -1198,8 +1207,14 @@ class ClientThread(Process):
             
             
         except IOError as e:
+            """
             if self.v: print "Thread %s could not open matrix: %s"%(self.name, str(e))
             self.req_fail("matrix %i could not be opened"%(mat))
+            """
+            if self.v: 
+                print "Thread %s could not open matrix,",
+                print " or matrix does not exist: %s"%(self.name, str(e))
+            self.handle_env_error(e, method, 'matrix')
             return
         except Exception as e:
             if self.v: 
