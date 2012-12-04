@@ -1102,6 +1102,27 @@ class ClientThread(Process):
             self.req_fail("of a database error")
             return
         
+    def unshare(self, req):
+        method = 'remove shared'
+        if self.v: 
+            print "Thread %s: %s: trying to get dset metadata"%(self.name, method)
+        try:
+            recipient = req['recipient']
+            dset = self.leaf(req['dset'])
+        except (KeyError, AssertionError):
+            self.handle_key_error(e, method)
+            return
+        
+        try:
+            conn = sqlite3.connect('COVI_svr.db', timeout=20)
+            conn.execute('DELETE FROM shared_files WHERE recipient=? AND owner=?'+
+                         'AND dataset=?',[recipient, self.permissions['uid'], dset])
+            self.req_ok()
+        except sqlite3.Error as e:
+            if self.v: print "Thread %s: %s: unshare failed, DB error: %s"%(self.name, method, str(e))
+            self.req_fail("of a database error")
+            return
+        
         
     def share_response(self, req):
         method = 'share respsonse'
