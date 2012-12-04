@@ -611,6 +611,7 @@ class ClientThread(Process):
                             "keepalive":self.keepalive,
                             "list":self.list,
                             "share":self.share,
+                            "unshare":self.unshare,
                             "copy":self.copy,
                             "copy shared":self.copy,
                             "remove shared":self.remove_shared,
@@ -1046,18 +1047,17 @@ class ClientThread(Process):
         if self.v: print "Thread %s: share request: trying to get dset metadata"%(self.name)
         try:
             recip = req['recipient']
-            dset = self.leaf(req['dset'])
-            write = int(req['write']) 
+            dset = self.leaf(req['dset']) 
             share = int(req['can share']) 
             
-            assert (write == 0 or write == 1) and (share == 0 or share == 1)
+            assert (share == 0 or share == 1)
         except KeyError as e:
             self.handle_key_error(e, method)
             return
         except AssertionError as e:
             if self.v: 
                 print "Thread %s: share: invalid value"%(self.name),
-                print  "for \"write\' or \"share\""
+                print  "for \"share\""
             self.req_fail("write and share must be 0 or 1")
             return
         """
@@ -1117,6 +1117,7 @@ class ClientThread(Process):
             conn = sqlite3.connect('COVI_svr.db', timeout=20)
             conn.execute('DELETE FROM shared_files WHERE recipient=? AND owner=?'+
                          'AND dataset=?',[recipient, self.permissions['uid'], dset])
+            conn.commit()
             self.req_ok()
         except sqlite3.Error as e:
             if self.v: print "Thread %s: %s: unshare failed, DB error: %s"%(self.name, method, str(e))
@@ -1264,7 +1265,7 @@ class ClientThread(Process):
             cur = conn.cursor()
             res = cur.execute('SELECT * FROM shared_files WHERE recipient=?'+
                               'OR owner=?', 
-                              [self.permissions['uid']*2]).fetchall()
+                              [self.permissions['uid'], self.permissions['uid']]).fetchall()
             conn.close()
             
             
