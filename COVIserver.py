@@ -1115,6 +1115,23 @@ class ClientThread(Process):
         
         try:
             conn = sqlite3.connect('COVI_svr.db', timeout=20)
+            
+            # Make sure the share record exists
+            res = conn.execute('SELECT * FROM shared_files '+
+                               'WHERE recipient=? AND owner=?'+
+                               'AND dataset=?',
+                               [recipient, self.permissions['uid'], dset]).fetchall()
+            if len(res) == 0:
+                if self.v: 
+                    print "Thread %s: %s: record does not exist: owner:%s recip:%s dset:%s"%(
+                            self.name, method, 
+                            self.permissions['uid'],
+                            recipient,
+                            dset)
+                self.req_fail("dataset %s is not shared with user %s"%(
+                                dset, recipient))
+                return
+                
             conn.execute('DELETE FROM shared_files WHERE recipient=? AND owner=?'+
                          'AND dataset=?',[recipient, self.permissions['uid'], dset])
             conn.commit()
@@ -1436,8 +1453,25 @@ class ClientThread(Process):
         
         try:
             conn = sqlite3.connect('COVI_svr.db', timeout=20)
+            # Make sure the share record exists
+            res = conn.execute('SELECT * FROM shared_files '+
+                               'WHERE recipient=? AND owner=?'+
+                               'AND dataset=?',
+                               [self.permissions['uid'], owner, dset]).fetchall()
+            if len(res) == 0:
+                if self.v: 
+                    print "Thread %s: %s: record does not exist: owner:%s recip:%s dset:%s"%(
+                            self.name, method, 
+                            owner,
+                            self.permissions['uid'],
+                            dset)
+                self.req_fail("dataset %s is not shared with user by %s"%(
+                                dset, owner))
+                return
+            
             conn.execute('DELETE FROM shared_files WHERE owner=? AND recipient=?'+
                          'AND dataset=?',[owner, self.permissions['uid'], dset])
+            conn.commit()
             self.req_ok()
         except sqlite3.Error as e:
             if self.v: print "Thread %s: %s: share failed, DB error: %s"%(self.name, method, str(e))
