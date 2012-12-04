@@ -1486,6 +1486,8 @@ class ClientThread(Process):
             except sqlite3.Error:
                 # This was alredy handled
                 return
+        else:
+            source_path = self.dset_path(source)
             
         try:
             shutil.copytree(source_path, dest_path)
