@@ -1470,12 +1470,12 @@ class ClientThread(Process):
             self.handle_key_error(e, method)
             return
         
-        source_path = self.dset_path(source)
+        dest_path = self.dset_path(dest)
         if shared:
             try:
                 # Make sure the dataset is shared with us before we try to copy it
                 if self.check_shared(owner, source):
-                    dest_path = os.path.join(self.config["data_dir"], owner, source)
+                    source_path = os.path.join(self.config["data_dir"], owner, source)
                 else:
                     if self.v: 
                         print "Thread %s: copy: dataset %s is not shared with user"%(self.name, source),
@@ -1488,7 +1488,6 @@ class ClientThread(Process):
                 return
             
         try:
-            dest_path = self.dset_path(dest)
             shutil.copytree(source_path, dest_path)
             self.req_ok()
         except OSError as e:
