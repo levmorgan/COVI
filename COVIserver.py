@@ -1256,19 +1256,24 @@ class ClientThread(Process):
         self.permissions["dset_list"] = dset_list
         shared = []
         requests = []
-        # Get shared datasets and requests
+        # Get datasets shared with the user, requests to share datasets with the user, 
+        # and datasets shared by the user
         try:    
             if self.v: print "Thread %s: list: trying to fetch list info from database"%(self.name)
             conn = sqlite3.connect("COVI_svr.db", timeout=20)
             cur = conn.cursor()
-            res = cur.execute('SELECT * FROM shared_files WHERE recipient=?', 
-                              [self.permissions['uid']]).fetchall()
+            res = cur.execute('SELECT * FROM shared_files WHERE recipient=?'+
+                              'OR owner=?', 
+                              [self.permissions['uid']*2]).fetchall()
+            conn.close()
             
             
             # List comprehensions are fast
-            shared = [i for i in res if i[4] == 0]
-            requests = [i for i in res if i[4] == 1]
-            conn.close()
+            shared = [i for i in res if i[4] == 0 
+                      and i[0] != self.permissions['uid']]
+            requests = [i for i in res if i[4] == 1
+                         and i[0] != self.permissions['uid']]
+            users_shares = [i for i in res if i[0] == self.permissions['uid']]
         
         except sqlite3.Error as e:
             if self.v: print "Thread %s: list: listing failed, DB error: %s"%(self.name, str(e))
@@ -1282,6 +1287,7 @@ class ClientThread(Process):
                          "list":dset_list,
                          "shared":shared,
                          "requests":requests,
+                         "user's shares":users_shares,
                          } 
                     }
                 )
