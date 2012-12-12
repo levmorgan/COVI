@@ -794,7 +794,10 @@ class ClientThread(Process):
                 req = req['covi-request']
                 if not self.permissions:
                     if req['type'] != 'auth':
-                        self.req_fail("the client is not authenticated yet")
+                        self.req_fail("Your request could not be executed "+
+                            "because he client is not authenticated yet. "+
+                            "Log in and try again.", prefix=False)
+                        continue
                 if req["type"] in self.dispatch:
                     self.dispatch[req['type']](req)
                 else:
