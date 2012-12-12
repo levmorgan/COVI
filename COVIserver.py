@@ -1211,7 +1211,7 @@ class ClientThread(Process):
                     dset_path = self.shared_dset_path(owner, dset)
                 else:
                     if self.v: 
-                        print "Thread %s: copy: dataset %s is not shared with user"%(self.name, dset),
+                        print "Thread %s: %s: dataset %s is not shared with user"%(self.name, method, dset),
                         print "or it does not exist"
                     
                     self.req_fail("dataset %s is not shared with you or does not exist"%(dset))
@@ -1265,6 +1265,95 @@ class ClientThread(Process):
                 print "Thread %s: matrix: error opening/sending matrix: %s"%(self.name, str(e))
             self.req_fail("there was an error reading or sending matrix %i"%(mat))
             return
+        
+        
+    def surface(self, req):
+        '''
+        Handle a request for local or shared surface data.
+        More or less copy and pasted from a matrix request. Sorry.
+        '''
+        method = 'surface'
+        if self.v: print "Thread %s: %s: trying to get dset metadata"%(self.name, method)
+        try:
+            dset = self.leaf(req['dset'])
+            owner = ''
+            
+            if req['type'] == "shared surface":
+                owner = req['owner']
+                
+        except (KeyError, ValueError) as e:
+            self.handle_key_error(e, method)
+            return
+        
+        # If dset is not shared, load data from the local path
+        if not owner:
+            dset_path = self.dset_path(dset)
+        else:
+            try:
+                if self.check_shared(owner, dset):
+                    dset_path = self.shared_dset_path(owner, dset)
+                else:
+                    if self.v: 
+                        print "Thread %s: %s: dataset %s is not shared with user"%(self.name, method, dset),
+                        print "or it does not exist"
+                    
+                    self.req_fail("dataset %s is not shared with you or does not exist"%(dset))
+                    return
+                    
+                    
+            except sqlite3.Error:
+                # check_shared does the appropriate error reporting for us
+                return 
+                
+        
+        try:
+            '''
+            Surf_file is an archive containing a spec file and the set of 
+            corresponding surfaces
+            '''
+            surf_file = open(os.path.join(dset_path, 'surfaces.tar.gz'))
+            data = surf_file.read()
+            surf_file.close()
+            
+            md5_hash = hashlib.md5(data).hexdigest()
+            surf_len = os.stat(surf_file.name).st_size
+            resp = { "covi-response": { "type":"surface", "len":surf_len, "md5":md5_hash} }
+            self.client_socket.send(json.dumps(resp))
+            try:
+                reply = self.try_recv(2048)
+            except CThreadException as e:
+                if self.v: print "Thread %s: surface request: %s"%(self.name, str(e))
+                return
+            try:
+                reply = json.loads(reply)
+                if reply["covi-request"]["type"] != "resp ok":
+                    raise CThreadException("")
+            except:
+                if self.v: 
+                    print "Thread %s: surface request: invalid data in response from client"%(self.name)
+                self.req_fail("it was missing required fields")
+                return
+            self.client_socket.send(data)
+            
+            
+        except IOError as e:
+            """
+            if self.v: print "Thread %s could not open matrix: %s"%(self.name, str(e))
+            self.req_fail("matrix %i could not be opened"%(mat))
+            """
+            if self.v: 
+                print "Thread %s could not open surface file,"%(self.name),
+                print " or surface file does not exist: %s"%(str(e))
+            self.handle_env_error(e, method, 'surface')
+            return
+        except Exception as e:
+            if self.v: 
+                print "Thread %s: surface file: error opening/sending "%(self.name),
+                print "surface file: %s"%(str(e))
+            self.req_fail("there was an error reading or sending surface "+
+                          "file for dataset %s"%(dset))
+            return
+        
         
     def list(self, req):
         # TODO: Add a special case for administrators
