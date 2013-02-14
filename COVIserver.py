@@ -34,6 +34,9 @@ class SvrSocketMgr(threading.Thread):
     cont = True
     
     def yn_input(self, default='Y'):
+        '''
+        Get an answer to a yes or no question from the command line 
+        '''
         valid = False
         out = ''
         while not valid:
@@ -505,6 +508,7 @@ class SvrSocketMgr(threading.Thread):
         for i in xrange(3):
             try:
                 svr_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                svr_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 svr_socket.bind((self.config['hostname'], self.config['svrport']))
                 svr_socket.listen(5)
                 self.svr_socket = svr_socket
@@ -605,12 +609,17 @@ class ClientThread(Process):
                             "new":self.new,
                             "matrix":self.matrix,
                             "shared matrix":self.matrix,
+                            "surface":self.surface,
+                            "shared surface":self.surface,
+                            "cluster":self.cluster,
+                            "shared cluster":self.cluster,
                             "close":self.close,
                             "rename":self.rename,
                             "remove":self.remove,
                             "keepalive":self.keepalive,
                             "list":self.list,
                             "share":self.share,
+                            "share response":self.share_response,
                             "unshare":self.unshare,
                             "copy":self.copy,
                             "copy shared":self.copy,
@@ -714,7 +723,7 @@ class ClientThread(Process):
         except sqlite3.Error as e:
             if self.v: print "Thread %s: check_shared: check failed, DB error: %s"%(self.name, str(e))
             self.req_fail("of a database error")
-            raise
+            return False
     
     def clean_up(self):
         # TODO: Make cleanup method for threads
@@ -1159,7 +1168,7 @@ class ClientThread(Process):
             return
 
         if response:
-            stmt = "UPDATE shared_files SET request = 0 WHERE owner=? AND recipient=? AND dataset=?"
+            stmt = "UPDATE shared_files SET is_request = 0 WHERE owner=? AND recipient=? AND dataset=?"
         else:
             stmt = "DELETE FROM shared_files WHERE owner=? AND recipient=? AND dataset=?"
         
@@ -1206,26 +1215,19 @@ class ClientThread(Process):
         if not owner:
             dset_path = self.dset_path(dset)
         else:
-            try:
-                if self.check_shared(owner, dset):
-                    dset_path = self.shared_dset_path(owner, dset)
-                else:
-                    if self.v: 
-                        print "Thread %s: %s: dataset %s is not shared with user"%(self.name, method, dset),
-                        print "or it does not exist"
-                    
-                    self.req_fail("dataset %s is not shared with you or does not exist"%(dset))
-                    return
-                    
-                    
-            except sqlite3.Error:
-                # check_shared does the appropriate error reporting for us
-                return 
+            if self.check_shared(owner, dset):
+                dset_path = self.shared_dset_path(owner, dset)
+            else:
+                if self.v: 
+                    print "Thread %s: %s: dataset %s is not shared with user"%(self.name, method, dset),
+                    print "or it does not exist"
                 
+                self.req_fail("dataset %s is not shared with you or does not exist"%(dset))
+                return 
         
         # TODO: Determine file format definitively
         try:
-            mat_file = open(os.path.join(dset_path,'%i.covi'%(mat)))
+            mat_file = open(os.path.join(dset_path,'%i.stat.1D'%(mat)))
             data = mat_file.read()
             mat_file.close()
             
@@ -1266,6 +1268,86 @@ class ClientThread(Process):
             self.req_fail("there was an error reading or sending matrix %i"%(mat))
             return
         
+    def cluster(self, req):
+        '''
+        Handle a request for cluster data
+        '''
+        method = 'cluster'
+        if self.v: print "Thread %s: %s: trying to get dset metadata"%(self.name, method)
+        try:
+            dset = self.leaf(req['dset'])
+            owner = ''
+            
+            if req['type'] == "shared cluster":
+                owner = req['owner']
+                
+        except (KeyError, ValueError) as e:
+            self.handle_key_error(e, method)
+            return
+        
+        # If dset is not shared, load data from the local path
+        if not owner:
+            dset_path = self.dset_path(dset)
+        else:
+            if self.check_shared(owner, dset):
+                dset_path = self.shared_dset_path(owner, dset)
+            else:
+                if self.v: 
+                    print "Thread %s: %s: dataset %s is not shared with user"%(self.name, method, dset),
+                    print "or it does not exist"
+                
+                self.req_fail("dataset %s is not shared with you or does not exist"%(dset))
+                return 
+                
+        
+        try:
+            '''
+            clusters.1D describes the mapping from the high-resolution 
+            FreeSurfer mesh to the clusters that we have correlation data for 
+            '''
+            surf_file = open(os.path.join(dset_path, 'clusters.1D'))
+            data = surf_file.read()
+            surf_file.close()
+            
+            md5_hash = hashlib.md5(data).hexdigest()
+            surf_len = os.stat(surf_file.name).st_size
+            resp = { "covi-response": { "type":"surface", "len":surf_len, "md5":md5_hash} }
+            self.client_socket.send(json.dumps(resp))
+            try:
+                reply = self.try_recv(2048)
+            except CThreadException as e:
+                if self.v: print "Thread %s: surface request: %s"%(self.name, str(e))
+                return
+            try:
+                reply = json.loads(reply)
+                if reply["covi-request"]["type"] != "resp ok":
+                    raise CThreadException("")
+            except:
+                if self.v: 
+                    print "Thread %s: %s request: invalid data in response from client"%(self.name, 
+                                                                                         method)
+                self.req_fail("it was missing required fields")
+                return
+            self.client_socket.send(data)
+            
+            
+        except IOError as e:
+            """
+            if self.v: print "Thread %s could not open matrix: %s"%(self.name, str(e))
+            self.req_fail("matrix %i could not be opened"%(mat))
+            """
+            if self.v: 
+                print "Thread %s could not open surface file,"%(self.name),
+                print " or surface file does not exist: %s"%(str(e))
+            self.handle_env_error(e, method, 'surface')
+            return
+        except Exception as e:
+            if self.v: 
+                print "Thread %s: surface file: error opening/sending "%(self.name),
+                print "surface file: %s"%(str(e))
+            self.req_fail("there was an error reading or sending surface "+
+                          "file for dataset %s"%(dset))
+            return
         
     def surface(self, req):
         '''
@@ -1289,20 +1371,14 @@ class ClientThread(Process):
         if not owner:
             dset_path = self.dset_path(dset)
         else:
-            try:
-                if self.check_shared(owner, dset):
-                    dset_path = self.shared_dset_path(owner, dset)
-                else:
-                    if self.v: 
-                        print "Thread %s: %s: dataset %s is not shared with user"%(self.name, method, dset),
-                        print "or it does not exist"
-                    
-                    self.req_fail("dataset %s is not shared with you or does not exist"%(dset))
-                    return
-                    
-                    
-            except sqlite3.Error:
-                # check_shared does the appropriate error reporting for us
+            if self.check_shared(owner, dset):
+                dset_path = self.shared_dset_path(owner, dset)
+            else:
+                if self.v: 
+                    print "Thread %s: %s: dataset %s is not shared with user"%(self.name, method, dset),
+                    print "or it does not exist"
+                
+                self.req_fail("dataset %s is not shared with you or does not exist"%(dset))
                 return 
                 
         
@@ -1598,25 +1674,24 @@ class ClientThread(Process):
         
         dest_path = self.dset_path(dest)
         if shared:
-            try:
-                # Make sure the dataset is shared with us before we try to copy it
-                if self.check_shared(owner, source):
-                    source_path = os.path.join(self.config["data_dir"], owner, source)
-                else:
-                    if self.v: 
-                        print "Thread %s: copy: dataset %s is not shared with user"%(self.name, source),
-                        print "or it does not exist"
-                    
-                    self.req_fail("dataset %s is not shared with you or does not exist"%(source))
-                    return
-            except sqlite3.Error:
-                # This was alredy handled
+            # Make sure the dataset is shared with us before we try to copy it
+            if self.check_shared(owner, source):
+                source_path = os.path.join(self.config["data_dir"], owner, source)
+            else:
+                if self.v: 
+                    print "Thread %s: copy: dataset %s is not shared with user"%(self.name, source),
+                    print "or it does not exist"
+                
+                self.req_fail("dataset %s is not shared with you or does not exist"%(source))
                 return
+            
         else:
             source_path = self.dset_path(source)
             
         try:
             shutil.copytree(source_path, dest_path)
+            if self.v: 
+                print "Thread %s: copy: copy succeeded, sending req_ok"%(self.name),
             self.req_ok()
         except OSError as e:
             if self.v: 
@@ -1645,26 +1720,28 @@ def close_gracefully(signal, frame):
                     
 if __name__ == '__main__':
     # Process arguments
+    usage = "Usage: python COVIserver.py [-v] [--help] [--reconfigure] [--verbose]"
     try:
         optlist, args = getopt(sys.argv[1:], 'v', ["help", "reconfigure", "verbose"])
     except GetoptError as e:
         print str(e)
-        print "Usage: python COVIserver.py [-v] [--help] [--reconfigure] [--verbose]"
+        print usage
         sys.exit(2)
     
     if "--help" in sys.argv:
-        print "Usage: python COVIserver.py [--help] [--reconfigure]"
+        print usage
         sys.exit(2)
     
     verbose = False
-    
+    for opt in optlist:    
+        if opt[0] == '--verbose' or opt[0] == '-v':
+            verbose = True
+            
     for opt in optlist:
         if opt[0] == '--reconfigure':
             SvrSocketMgr().configure_svr()
             sys.exit(0)
-        
-        if opt[0] == '--verbose' or opt[0] == '-v':
-            verbose = True
+    
         
     # Start server
     svr_socket_manager = SvrSocketMgr(verbose=verbose)
