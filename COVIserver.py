@@ -13,6 +13,8 @@ from getopt import getopt, GetoptError
 #from collections import defaultdict
 #from time import sleep
 from multiprocessing import Process
+import inspect
+import logging
 
 svr_socket_manager = ''
 
@@ -24,7 +26,8 @@ def full_name(obj):
 
 class SvrSocketMgr(threading.Thread):
     """
-    This is the driver class for the server. It sets up the server and manages sockets/threads.
+    This is the driver class for the server. It sets up the server and manages
+    sockets/threads.
     """
     svr_socket = ''
     config = {}
@@ -36,6 +39,11 @@ class SvrSocketMgr(threading.Thread):
     def yn_input(self, default='Y'):
         '''
         Get an answer to a yes or no question from the command line 
+        inputs:
+            default='Y': The option to select on empty input. 
+                         Can be either Y,n, or ''. If '', the user must choose 
+                         y or n.
+        returns: 'y' or 'n'  
         '''
         valid = False
         out = ''
@@ -68,6 +76,12 @@ class SvrSocketMgr(threading.Thread):
         return out
     
     def dir_input(self, default=''):
+        '''
+        Takes a directory as input from the command line:
+        inputs:
+            default='': The directory to choose on empty input
+        returns: the path to a valid directory
+        '''
         valid = False
         while not valid:
             if default:
@@ -86,6 +100,11 @@ class SvrSocketMgr(threading.Thread):
             
     
     def pass_input(self):
+        '''
+        Takes a password as input from the command line. 
+        The string is not echoed as the user types it. 
+        returns: the password
+        '''
         password = ''
         verify = ' '
         
@@ -103,12 +122,17 @@ class SvrSocketMgr(threading.Thread):
         return password
             
     def fatal_error(self, function, e):
-        print "COVI has encountered an error during %s and cannot continue."%(function)
-        print "The error was:"
-        print "%s: %s"%(full_name(e), str(e))
+        '''
+        Display an error message and close.
+        inputs:
+            function: The name of the function that raised the error
+            e: The exception object
+        '''
+        logging.critical("COVI has encountered an error during "+
+             "%s and cannot continue.\n"%(function) + 
+             "The error was:\n"+ "%s: %s"%(full_name(e), str(e)) )
         print full_name(e)
         print_exc()
-        #raise Exception("Fatal")
         signal.alarm(1)
 
     def __init__(self, conf_file="COVI_svr.conf", verbose=False):
@@ -119,14 +143,18 @@ class SvrSocketMgr(threading.Thread):
         threading.Thread.__init__(self)
         # Try to load server config
         try:
-            conf_file = open(conf_file)
-        except IOError:
-            print "Could not open configuration file. Configure COVI server?"
+            self.COVI_dir = os.path.dirname(inspect.stack()[-1][1])
+            conf_file = open(os.path.join(self.COVI_dir, conf_file))
+            self.config = json.load(conf_file)
+        except (IOError, ValueError):
+            print "Could not configuration file: %s. Configure COVI server?"%(
+                self.COVI_dir)
             out = self.yn_input()
             if out == 'y':
                 try:
                     self.configure_svr()
                     conf_file = open(conf_file)
+                    self.config = json.load(conf_file)
                 # TODO: Catching "Exception" here
                 except Exception as e:
                     print ("COVI has encountered a(n) %s exception"%(full_name(e)) + 
@@ -139,20 +167,26 @@ class SvrSocketMgr(threading.Thread):
                 print "COVI can't proceed without the configuration file. Exiting."
                 sys.exit(1)
                 
-        self.config = json.load(conf_file)
         conf_file.close()
         self.config['verbose'] = verbose
         self.v = verbose
+        logging.basicConfig(
+            filename=os.path.join(self.COVI_dir, 'COVI_log.log'),
+            level=logging.WARNING)
+        
             
                 
     
     def configure_svr(self):
         # TODO: Break this up into different methods, so e.g. users could be added without reconfiguring the whole server
         try:
-            open('COVIserver.py', 'r')
+            open(os.path.join(self.COVI_dir, 'COVIserver.py'), 'r')
+            self.config['COVI_dir'] = self.COVI_dir
             
         except IOError:
-            print "ERROR: COVI server configuration must be started from the COVI directory."
+            logging.warning("Can't find the COVI server directory. " 
+            "Please input the path to COVI server.")
+            self.COVI_dir = self.dir_input()
             sys.exit(1)
         ''' 
         Configure COVI server and write out a configuration file.
@@ -233,15 +267,15 @@ class SvrSocketMgr(threading.Thread):
             conn = sqlite3.connect("COVI_svr.db")
             conn.text_factory = str
         except sqlite3.OperationalError:
-            print "Could not connect to COVI_svr.db. Make sure COVI can access this file."
+            logging.critical("Could not connect to COVI_svr.db "+
+                "in COVI's install directory. Make sure the file "+
+                "is not write locked.")
             sys.exit(1)
         
     
         c = conn.cursor()
         
         valid = False
-        # FIXME: Make exception handler respond intelligently to duplicate tables.
-        # FIXME: Right now it would fail if users was a duplicate, or just repeat the previous error.
         while not valid:
             try:
                 c.execute('''CREATE TABLE users
@@ -253,10 +287,12 @@ class SvrSocketMgr(threading.Thread):
             except sqlite3.OperationalError as e:
                 tab_name = re.sub(r'^table (.*) already exists$', '\\1', e.message)
                 if tab_name != e.message: # If the message matches the regex
-                    print "COVI has encountered an error during configuration:"
-                    print e.message
-                    print "If you keep the table, it may leave the database in an inconsistent state."
-                    print "Delete and re-create table? Any data in the table will be lost."
+                    logging.error("COVI has encountered an error during "+
+                        "configuration:\n" + e.message + "If you keep the "+
+                        "table, it may leave the database in an inconsistent "+
+                        "state.\n"+
+                        "Delete and re-create table? Any data in the table "+
+                        "will be lost.")
                     inp = self.yn_input(default='n')
                     if inp == 'y':
                         c.execute("DROP TABLE users;") 
@@ -278,11 +314,14 @@ class SvrSocketMgr(threading.Thread):
 
             except sqlite3.OperationalError as e:
                 tab_name = re.sub(r'^table (.*) already exists$', '\\1', e.message)
+                tab_name = re.sub(r'^table (.*) already exists$', '\\1', e.message)
                 if tab_name != e.message: # If the message matches the regex
-                    print "COVI has encountered an error during configuration:"
-                    print e.message
-                    print "If you keep the table, it may leave the database in an inconsistent state."
-                    print "Delete and re-create table? Any data in the table will be lost."
+                    logging.error("COVI has encountered an error during "+
+                        "configuration:\n" + e.message + "If you keep the "+
+                        "table, it may leave the database in an inconsistent "+
+                        "state.\n"+
+                        "Delete and re-create table? Any data in the table "+
+                        "will be lost.")
                     inp = self.yn_input(default='n')
                     if inp == 'y':
                         c.execute("DROP TABLE shared_files;") 
@@ -307,7 +346,7 @@ class SvrSocketMgr(threading.Thread):
             print "Administrator already exists, continuing with adding users."
         else:
             print "Administrator Account"
-            print "The Administrator can add, change, or remove any dataset administrated by COVI Server."
+            print "The administrator can add, change, or remove any dataset administrated by COVI Server."
             print "The user name for the administrator account is admin. Enter a password for the administrator account."
             
             passwd = self.pass_input()
@@ -345,7 +384,8 @@ class SvrSocketMgr(threading.Thread):
                     if not os.path.exists(os.path.join(config['data_dir'], user)):
                         os.mkdir(os.path.join(config['data_dir'], user))
                 except sqlite3.IntegrityError:
-                    print "Cannot add user: user with that username already exists."
+                    logging.error("Cannot add user: user with that "+
+                                  "username already exists.")
             print "Do you want to add other users at this time?"
             out = self.yn_input()
         
@@ -541,7 +581,7 @@ class SvrSocketMgr(threading.Thread):
                                               self.client_threads[-1].name,
                                               str(e)
                                               )
-                if self.v: print err_str
+                logging.error(err_str)
                 self.client_threads[-1].req_fail("The thread handling your requests experienced a fatal error. "
                                                  +"Please reconnect.")
                 
@@ -662,12 +702,12 @@ class ClientThread(Process):
                 raise CThreadException("connection was terminated")
             return data
         except ssl.socket_error:
-            if self.v: print "Thread %s: timed out"%(self.name)
+            logging.warning("Thread %s: timed out"%(self.name))
             self.req_fail('the connection timed out')
             raise CThreadException("connection timed out")
         except socket.error as e:
-            if self.v: 
-                print "Thread %s socket error while receiving: %s"%(self.name, str(e))
+            logging.warning(
+                "Thread %s socket error while receiving: %s"%(self.name, str(e)))
             self.req_fail('there was a connection error: %s'%(str(e)))
             raise CThreadException("connection error")
             
@@ -721,7 +761,8 @@ class ClientThread(Process):
             return res
             
         except sqlite3.Error as e:
-            if self.v: print "Thread %s: check_shared: check failed, DB error: %s"%(self.name, str(e))
+            logging.error("Thread %s: check_shared: "%(self.name)+
+                "check failed, DB error: %s"%(str(e)))
             self.req_fail("of a database error")
             return False
     
@@ -756,7 +797,7 @@ class ClientThread(Process):
         try:
             self.client_socket.do_handshake()
         except ssl.socket_error:
-            if self.v: print "Thread %s handshake timed out"%self.name
+            logging.warning("Thread %s handshake timed out"%self.name)
             self.client_socket.close()
             return
         if self.v: print "Thread %s unblocking from SSL handshake"%self.name
@@ -777,14 +818,14 @@ class ClientThread(Process):
                 timeouts += 1
                 # If there has been no communication for 5 minutes, die
                 if timeouts >= 60:
-                    if self.v: print "Thread %s timed out"%(self.name)
+                    logging.warning("Thread %s timed out"%(self.name))
                     self.client_socket.close()
                     return
                 else:
                     continue
             
             if not enc_req:
-                if self.v: print "Thread %s connection is dead, dying"%(self.name)
+                logging.warning("Thread %s connection is dead, dying"%(self.name))
                 self.client_socket.close()
                 return
             
@@ -796,7 +837,7 @@ class ClientThread(Process):
             except ValueError:
                 # Got bad data. Ignore it, keep looping
                 self.req_fail("it was not a valid request")
-                if self.v: print "Thread %s failed to decode data"%(self.name)
+                logging.warning("Thread %s failed to decode JSON data"%(self.name))
                 continue
             try:
                 if self.v: print "Thread %s trying to handle request"%self.name
@@ -818,11 +859,15 @@ class ClientThread(Process):
             # TODO: Catching "Exception" here
             except Exception as e:
                 if self.v: 
-                    print "Thread %s encountered an uncaught %s exception while processing a %s request: %s. "%(
-                                                                        self.name, full_name(e), req['type'], str(e))
+                    logging.error(
+                        "Thread %s encountered an uncaught %s "%(
+                        self.name, full_name(e))+
+                        "exception while processing a %s request: %s."%(
+                        req['type'], str(e)))
                     print_exc()
-                self.req_fail("there was an uncaught %s error while processing the %s request: %s "
-                              %(full_name(e), req['type'], str(e)))
+                self.req_fail("there was an uncaught %s error while"%(
+                    full_name(e))+ 
+                    "processing the %s request: %s "%(req['type'], str(e)))
                 continue
             # Once we're done processing the input, close when the program closes
         
@@ -852,24 +897,23 @@ class ClientThread(Process):
         the error originated
         '''
         if e[0] == 39:
-            if self.v: print "Thread %s: %s: %s already exists: %s"%(self.name, 
-                                                                     method,
-                                                                     obj_type, 
-                                                                     str(e))
-            self.req_fail("a %s called %s already exists"%(obj_type, 
-                                                           e.filename))
+            logging.warning("Thread %s: %s: %s already exists: %s"%(self.name, 
+                method,
+                obj_type, 
+                                                     str(e)))
+            self.req_fail("a %s called %s already exists"%(obj_type, e.filename))
         elif e[0] == 2:
-            if self.v: print "Thread %s: %s: %s does not exist"%(self.name, 
-                                                                 method,
-                                                                 obj_type,)
+            logging.warning("Thread %s: %s: %s does not exist"%(self.name,
+                method,
+                obj_type,))
             self.req_fail("requested %s %s does not exist"%(obj_type, 
                                                             e.filename))
         elif e[0] == 17:
-            if self.v: print "Thread %s: %s: destination %s already exists"%(self.name, 
-                                                                             method,
-                                                                             obj_type,)
+            logging.warning("Thread %s: %s: destination %s already exists"%(self.name, 
+                method,
+                obj_type,))
             self.req_fail("the destination %s %s already exists"%(obj_type, 
-                                                                  e.filename))
+                e.filename))
         else:
             if self.v: print "Thread %s: %s: failed to read or write file: %s"%(self.name, 
                                                                                 method, 
@@ -880,8 +924,8 @@ class ClientThread(Process):
     
     def handle_key_error(self, e, method):
         if self.v: 
-            print "Thread %s: %s: invalid data in request: %s: %s"%(
-                self.name, method, full_name(e), str(e))
+            logging.warning("Thread %s: %s: invalid data in request: %s: %s"%(
+                self.name, method, full_name(e), str(e)))
         self.req_fail("it was missing required fields "+
                       "for a %s request: %s"%(method, str(e)))
         
@@ -900,8 +944,10 @@ class ClientThread(Process):
         
         except KeyError:
             # Bad request, ignore it
-            if self.v: print "Thread %s: auth: could not find valid uid and password"%(self.name)
-            self.req_fail("it was an auth request but did not contain a valid username and password")
+            logging.warning("Thread %s: auth: "%(self.name)+
+                          "could not find valid uid and password")
+            self.req_fail("it was an auth request but did not contain "+
+                          "a valid username and password")
             return
         
         # Fetch permissions
@@ -928,7 +974,8 @@ class ClientThread(Process):
                 
         
         except Exception as e:
-            if self.v: print "Thread %s: auth: auth failed, DB error: %s"%(self.name, str(e))
+            logging.error("Thread %s: auth: "%(self.name)
+                          +"auth failed, DB error: %s"%(str(e)))
             self.req_fail("of a database error")
             return
             
@@ -958,9 +1005,11 @@ class ClientThread(Process):
                 dset_arch = open(os.path.join(dset_dir,'%s.tar.gz'%(dset)), 'wb')
                  
             except (OSError, IOError) as e:
-                '''if self.v: print "Thread %s: new dset: failed to create file/dir for new dset%s: %s"%(self.name, 
-                                                                                              full_name(e), 
-                                                                                              str(e))
+                '''
+                if self.v: print "Thread %s: new dset: failed to create file/dir
+                for new dset%s: %s"%(self.name,
+                    full_name(e), 
+                    str(e))
                 self.req_fail('your dataset could not be written to disk')'''
                 self.handle_env_error(e, method)
                 raise CThreadException()
@@ -969,8 +1018,9 @@ class ClientThread(Process):
             try:
                 self.req_ok()
             except Exception as e:
-                if self.v: print "Thread %s: new dset: encountered unrecoverable exception"%(self.name, str(e))
-                raise CThreadException()
+                logging.error("Thread %s: new dset: encountered "%(self.name)+
+                "unrecoverable exception: %s"%(str(e)))
+                raise CThreadException(str(e))
                 
                 
             
@@ -991,23 +1041,26 @@ class ClientThread(Process):
                 if self.v: print "Thread %s: new dset: recv'd %i bytes"%(self.name, bytes_recvd)
                 data = ''.join(arr)
             except ssl.socket_error:
-                if self.v: print "Thread %s: new dset: timed out"%(self.name)
+                logging.warning("Thread %s: new dset: timed out"%(self.name))
                 self.req_fail('the connection timed out while transferring the dataset.')
                 raise CThreadException()
             except IOError:
-                if self.v: print "Thread %s: new dset: failed while writing archive"%(self.name)
+                logging.error("Thread %s: new dset: "%(self.name)+
+                              "failed while writing archive")
                 self.req_fail('there was an error while writing archive')
                 raise CThreadException()
             except CThreadException as e:
-                if self.v: print "Thread %s: new dset: %s"%(self.name, str(e))
+                logging.error("Thread %s: new dset: %s"%(self.name, str(e)))
                 raise
     
                     
             if self.v: print "Thread %s: new dset: checking data integrity "%(self.name)
             svr_md5 = arch_hash.hexdigest()
             if svr_md5 != md5:
-                if self.v: print "Thread %s: new dset: data integrity check failed "%(self.name)
-                self.req_fail('the data received was different from the data sent due to a transmission error',)
+                logging.warning("Thread %s: new dset: "%(self.name)+
+                              "data integrity check failed ")
+                self.req_fail("the data received was different "+
+                    "from the data sent due to a transmission error",)
                 raise CThreadException()
                 
             if self.v: print "Thread %s: new dset: writing archive "%(self.name)
@@ -1034,24 +1087,29 @@ class ClientThread(Process):
                 if self.v: print "Thread %s: new dset: removing archive"%(self.name)
                 os.remove(dset_arch.name)
             except tarfile.TarError as e:
-                if self.v: print "Thread %s: new dset: opening tar failed %s"%(self.name,str(e))
+                logging.warning("Thread %s: new dset: "%(self.name)+
+                              "opening tar failed %s"%(str(e)))
                 self.req_fail('the data received was not a valid tar archive')
             except IOError as e:
-                if self.v: print "Thread %s: new dset: failed while writing dataset %s"%(self.name,str(e))
+                logging.error("Thread %s: new dset: failed while "%(self.name,)+ 
+                    "writing dataset %s"%(str(e)))
                 self.req_fail('there was an error while writing the dataset')
                 
             if self.v: print "Thread %s: new dset: new dataset addition OK"%(self.name)
             self.req_ok()
         except Exception as e:
-            if self.v: print "Thread %s: new dset: cleaning up directories "%(self.name)
+            logging.warning("Thread %s: new dset failed, cleaning "%(self.name)+
+                "up directories")
             if os.path.exists(dset_dir):
                 try:
                     shutil.rmtree(dset_dir)
                 except OSError:
-                    #TODO: Notify an administrator about this
+                    logging.error("Thread %s: new dset: could not "%(self.name)+
+                        "remove directory after failure.")
                     pass
             if type(e) != CThreadException:
-                if self.v: print "Thread %s: new dset: caught non-CThread Exception; passing it on"%(self.name)
+                logging.error("Thread %s: new dset: caught "%(self.name)+
+                    "non-CThread Exception; passing it on")
                 raise
             
     def share(self, req):
@@ -1081,12 +1139,15 @@ class ClientThread(Process):
         """
         dset_path = self.dset_path(dset)
         if not os.path.exists(dset_path):
-            if self.v: print "Thread %s: share: dataset %s does not exist"%(self.name, dset)
+            logging.warning("Thread %s: share: dataset %s "%(self.name, dset)+
+                "does not exist")
             self.req_fail("dataset %s does not exist"%dset)
         
         if not os.access(dset_path, os.R_OK):
-            if self.v: print "Thread %s: share: don't have permissions to read %s"%(self.name, dset)
-            self.req_fail("COVI does not have permissions to read %s. Contact your administrator"%dset)
+            logging.warning("Thread %s: share: don't have "%(self.name)+
+                "permissions to read %s"%(dset))
+            self.req_fail("COVI does not have permissions to read %s. "%(dset)+
+                "Contact your administrator")
             
         if recip == self.permissions['uid']:
             self.req_fail("you can't share a dataset with yourself")
@@ -1110,14 +1171,16 @@ class ClientThread(Process):
             self.req_ok()
         
         except sqlite3.Error as e:
-            if self.v: print "Thread %s: share: share failed, DB error: %s"%(self.name, str(e))
+            logging.error("Thread %s: share: share failed, DB error: "%(self.name)+
+                          "%s"%(str(e)))
             self.req_fail("of a database error")
             return
         
     def unshare(self, req):
         method = 'remove shared'
         if self.v: 
-            print "Thread %s: %s: trying to get dset metadata"%(self.name, method)
+            print "Thread %s: %s: trying to get dset "%(self.name, method),
+            print "metadata"
         try:
             recipient = req['recipient']
             dset = self.leaf(req['dset'])
@@ -1149,7 +1212,8 @@ class ClientThread(Process):
             conn.commit()
             self.req_ok()
         except sqlite3.Error as e:
-            if self.v: print "Thread %s: %s: unshare failed, DB error: %s"%(self.name, method, str(e))
+            logging.error("Thread %s: %s: unshare failed,"%(self.name, method)+
+                " DB error: %s"%(str(e)))
             self.req_fail("of a database error")
             return
         
@@ -1186,7 +1250,8 @@ class ClientThread(Process):
             self.req_ok()
                 
         except sqlite3.Error as e:
-            if self.v: print "Thread %s: share response: failed, DB error: %s"%(self.name, str(e))
+            logging.error("Thread %s: share response: failed, "%(self.name)+
+                          "DB error: %s"%(str(e)))
             self.req_fail("of a database error: %s"%(str(e)))
         return
         
@@ -1207,10 +1272,6 @@ class ClientThread(Process):
             self.handle_key_error(e, method)
             return
         
-        """dset_path = os.path.join(
-                                self.permissions["user_dir"],
-                                dset
-                                )"""
         # If dset is not shared, load data from the local path
         if not owner:
             dset_path = self.dset_path(dset)
@@ -1218,11 +1279,11 @@ class ClientThread(Process):
             if self.check_shared(owner, dset):
                 dset_path = self.shared_dset_path(owner, dset)
             else:
-                if self.v: 
-                    print "Thread %s: %s: dataset %s is not shared with user"%(self.name, method, dset),
-                    print "or it does not exist"
+                logging.warning("Thread %s: %s: dataset "%(self.name, method)+
+                    "%s is not shared with user or it does not exist"%(dset))
                 
-                self.req_fail("dataset %s is not shared with you or does not exist"%(dset))
+                self.req_fail("dataset %s is not shared with you"%(dset)+
+                    "or does not exist")
                 return 
         
         # TODO: Determine file format definitively
@@ -1238,15 +1299,15 @@ class ClientThread(Process):
             try:
                 reply = self.try_recv(2048)
             except CThreadException as e:
-                if self.v: print "Thread %s: matrix request: %s"%(self.name, str(e))
+                logging.warning("Thread %s: matrix request: %s"%(self.name, str(e)))
                 return
             try:
                 reply = json.loads(reply)
                 if reply["covi-request"]["type"] != "resp ok":
                     raise CThreadException("")
             except:
-                if self.v: 
-                    print "Thread %s: matrix request: invalid data in response from client"%(self.name)
+                logging.warning("Thread %s: matrix request: invalid "%(self.name)+
+                    "data in response from client")
                 self.req_fail("it was missing required fields")
                 return
             self.client_socket.send(data)
@@ -1263,9 +1324,10 @@ class ClientThread(Process):
             self.handle_env_error(e, method, 'matrix')
             return
         except Exception as e:
-            if self.v: 
-                print "Thread %s: matrix: error opening/sending matrix: %s"%(self.name, str(e))
-            self.req_fail("there was an error reading or sending matrix %i"%(mat))
+            logging.warning("Thread %s: matrix: error "%(self.name)+
+                            "opening/sending matrix: %s"%(str(e)))
+            self.req_fail("there was an error reading or "+
+                          "sending matrix %i"%(mat))
             return
         
     def cluster(self, req):
@@ -1323,9 +1385,8 @@ class ClientThread(Process):
                 if reply["covi-request"]["type"] != "resp ok":
                     raise CThreadException("")
             except:
-                if self.v: 
-                    print "Thread %s: %s request: invalid data in response from client"%(self.name, 
-                                                                                         method)
+                logging.warning("Thread %s: %s request: "%(self.name, method)+
+                    "invalid data in response from client")
                 self.req_fail("it was missing required fields")
                 return
             self.client_socket.send(data)
@@ -1343,8 +1404,8 @@ class ClientThread(Process):
             return
         except Exception as e:
             if self.v: 
-                print "Thread %s: surface file: error opening/sending "%(self.name),
-                print "surface file: %s"%(str(e))
+                logging.error("Thread %s: surface file: "%(self.name)+
+                    "error opening/sending surface file: %s"%(str(e)))
             self.req_fail("there was an error reading or sending surface "+
                           "file for dataset %s"%(dset))
             return
@@ -1375,8 +1436,9 @@ class ClientThread(Process):
                 dset_path = self.shared_dset_path(owner, dset)
             else:
                 if self.v: 
-                    print "Thread %s: %s: dataset %s is not shared with user"%(self.name, method, dset),
-                    print "or it does not exist"
+                    logging.warning("Thread %s: %s: dataset %s "%(self.name, 
+                        method, dset)+
+                        "is not shared with user or it does not exist")
                 
                 self.req_fail("dataset %s is not shared with you or does not exist"%(dset))
                 return 
@@ -1398,7 +1460,8 @@ class ClientThread(Process):
             try:
                 reply = self.try_recv(2048)
             except CThreadException as e:
-                if self.v: print "Thread %s: surface request: %s"%(self.name, str(e))
+                logging.warning("Thread %s: surface request: %s"%(
+                    self.name, str(e)))
                 return
             try:
                 reply = json.loads(reply)
@@ -1406,7 +1469,8 @@ class ClientThread(Process):
                     raise CThreadException("")
             except:
                 if self.v: 
-                    print "Thread %s: surface request: invalid data in response from client"%(self.name)
+                    logging.warning("Thread %s: "%(self.name)+
+                        "surface request: invalid data in client's response")
                 self.req_fail("it was missing required fields")
                 return
             self.client_socket.send(data)
@@ -1417,15 +1481,16 @@ class ClientThread(Process):
             if self.v: print "Thread %s could not open matrix: %s"%(self.name, str(e))
             self.req_fail("matrix %i could not be opened"%(mat))
             """
-            if self.v: 
-                print "Thread %s could not open surface file,"%(self.name),
-                print " or surface file does not exist: %s"%(str(e))
+            logging.warning(
+                "Thread %s could not open surface file,"%(self.name)+
+                " or surface file does not exist: %s"%(str(e)))
             self.handle_env_error(e, method, 'surface')
             return
         except Exception as e:
             if self.v: 
-                print "Thread %s: surface file: error opening/sending "%(self.name),
-                print "surface file: %s"%(str(e))
+                logging.error(
+                    "Thread %s: surface file: error opening/"%(self.name)+
+                    "sending surface file: %s"%(str(e)))
             self.req_fail("there was an error reading or sending surface "+
                           "file for dataset %s"%(dset))
             return
@@ -1462,7 +1527,8 @@ class ClientThread(Process):
             users_shares = [i for i in res if i[0] == self.permissions['uid']]
         
         except sqlite3.Error as e:
-            if self.v: print "Thread %s: list: listing failed, DB error: %s"%(self.name, str(e))
+            logging.error("Thread %s: list: listing failed, "%(self.name)+
+                          "DB error: %s"%(str(e)))
             self.req_fail("of a database error")
             return
         try:
@@ -1481,9 +1547,8 @@ class ClientThread(Process):
             if self.v: 
                 print "Thread %s: list: sent list of length %i"%(self.name, len(dset_list))
         except ssl.socket_error as e:
-            if self.v: 
-                print "Thread %s: list: error while sending directory list: %e"%(
-                    self.name, str(e))
+            logging.warning("Thread %s: list: error while "%(self.name)+
+                            "sending directory list: %s"%(str(e)))
             return
             
         
@@ -1539,7 +1604,8 @@ class ClientThread(Process):
             print "Calling handle_env_error"
             self.handle_env_error(e, method)
         except sqlite3.Error as e:
-            if self.v: print "Thread %s: rename: rename failed, DB error: %s"%(self.name, str(e))
+            logging.error("Thread %s: rename: rename failed, "%(self.name)+
+                          "DB error: %s"%(str(e)))
             self.req_fail("of a database error")
             # If the DB part failed, undo the directory rename
             try:
@@ -1574,8 +1640,8 @@ class ClientThread(Process):
             return
         
         if not os.access(dset_path, os.W_OK):
-            print "Thread %s: remove: error: dataset %s does not exist"%(self.name, dset),
-            print "or is not writable."
+            logging.warning("Thread %s: remove: dataset %s "%(self.name, dset),
+                + "does not exist or is not writable.")
             self.req_fail('dataset %s does not exist or is not writable'%(dset))
             return
             
@@ -1596,7 +1662,8 @@ class ClientThread(Process):
             return
         
         except sqlite3.Error as e:
-            if self.v: print "Thread %s: share: share failed, DB error: %s"%(self.name, str(e))
+            logging.error("Thread %s: share: share "%(self.name)+
+                "failed, DB error: %s"%(str(e)))
             self.req_fail("of a database error")
             return
                 
@@ -1627,12 +1694,12 @@ class ClientThread(Process):
                                'AND dataset=?',
                                [self.permissions['uid'], owner, dset]).fetchall()
             if len(res) == 0:
-                if self.v: 
-                    print "Thread %s: %s: record does not exist: owner:%s recip:%s dset:%s"%(
+                logging.warning(
+                            "Thread %s: %s: record does not exist: owner:%s recip:%s dset:%s"%(
                             self.name, method, 
                             owner,
                             self.permissions['uid'],
-                            dset)
+                            dset))
                 self.req_fail("dataset %s is not shared with user by %s"%(
                                 dset, owner))
                 return
@@ -1642,7 +1709,8 @@ class ClientThread(Process):
             conn.commit()
             self.req_ok()
         except sqlite3.Error as e:
-            if self.v: print "Thread %s: %s: share failed, DB error: %s"%(self.name, method, str(e))
+            logging.error("Thread %s: %s: share failed, DB error: %s"%(
+                self.name, method, str(e)))
             self.req_fail("of a database error")
             return
         
@@ -1678,9 +1746,8 @@ class ClientThread(Process):
             if self.check_shared(owner, source):
                 source_path = os.path.join(self.config["data_dir"], owner, source)
             else:
-                if self.v: 
-                    print "Thread %s: copy: dataset %s is not shared with user"%(self.name, source),
-                    print "or it does not exist"
+                logging.warning("Thread %s: copy: dataset %s is not shared with user"%(self.name, source),
+                    +"or it does not exist")
                 
                 self.req_fail("dataset %s is not shared with you or does not exist"%(source))
                 return
@@ -1694,10 +1761,12 @@ class ClientThread(Process):
                 print "Thread %s: copy: copy succeeded, sending req_ok"%(self.name),
             self.req_ok()
         except OSError as e:
+            """
             if self.v: 
                 print "Thread %s: copy: could not copy dataset: %s"%(self.name, str(e))
                 print "Source dir: %s"%(source_path)
                 print "Dest dir: %s"%(dest_path)
+                """
             self.handle_env_error(e, method)
     
                     
