@@ -1,5 +1,5 @@
-'''
-Created on Aug 1, 2012
+#!/usr/bin/env python2.7
+'''Created on Aug 1, 2012
 
 @author: lmorgan
 '''
@@ -170,9 +170,20 @@ class SvrSocketMgr(threading.Thread):
         conf_file.close()
         self.config['verbose'] = verbose
         self.v = verbose
+        
+        # Create loggers for the log file and stdout
+        # Log errors and above to the file, warnings and above to stdout
         logging.basicConfig(
-            filename=os.path.join(self.COVI_dir, 'COVI_log.log'),
-            level=logging.WARNING)
+            filename=os.path.join(self.COVI_dir, 'COVI_svr.log'),
+            format='%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
+            datefmt='%m-%d %H:%M',
+            level=logging.ERROR)
+        console = logging.StreamHandler()
+        formatter = logging.Formatter('%(name)-12s: %(levelname)-8s %(message)s')
+        console.setFormatter(formatter)
+        console.setLevel(logging.WARNING)
+        logging.getLogger('').addHandler(console)
+        
         
             
                 
@@ -288,7 +299,7 @@ class SvrSocketMgr(threading.Thread):
                 tab_name = re.sub(r'^table (.*) already exists$', '\\1', e.message)
                 if tab_name != e.message: # If the message matches the regex
                     logging.error("COVI has encountered an error during "+
-                        "configuration:\n" + e.message + "If you keep the "+
+                        "configuration:\n" + e.message + '\n' + "If you keep the "+
                         "table, it may leave the database in an inconsistent "+
                         "state.\n"+
                         "Delete and re-create table? Any data in the table "+
@@ -1788,6 +1799,7 @@ def close_gracefully(signal, frame):
     sys.exit(0)
                     
 if __name__ == '__main__':
+    print 'OK'
     # Process arguments
     usage = "Usage: python COVIserver.py [-v] [--help] [--reconfigure] [--verbose]"
     try:
